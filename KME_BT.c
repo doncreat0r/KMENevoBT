@@ -87,7 +87,7 @@ void PCSend(u08 data)
 }
 
 static inline void StartT0(void) {
-	cbi(TIMSK0, TOIE0);	   // enable overflow
+	cbi(TIMSK0, TOIE0);	   // disable overflow
 	sbi(TIFR0, TOV0);						// reset overflow flag
 	PCtimeout = 0;
 	TCNT0 = T0delay; // reload timer overflow
@@ -95,7 +95,7 @@ static inline void StartT0(void) {
 }
 
 static inline void StartT2(void) {
-	cbi(TIMSK2, TOIE2);	   // enable overflow
+	cbi(TIMSK2, TOIE2);	   // disable overflow
 	sbi(TIFR2, TOV2);						// reset overflow flag
 	KMEtimeout = 0;
 	TCNT2 = T2delay; // reload timer overflow
@@ -119,6 +119,11 @@ ISR(USART1_RX_vect)
 		} else {
 			KMEcs = KMEcs + RS;
 		}
+		// prevent buffer overflow
+		if (KMEidx >= sizeof(KMEBuff)) {
+			KMEidx = 0;
+			KMEcs = 0;
+		}
 	}
 }
 
@@ -136,7 +141,7 @@ ISR(USART1_UDRE_vect)
 	// if not in transparent mode - send cmd 
 	if ((PTmode < modeTransparent) && (KMEsnd < KMEcmds[cmd][1])) {
 		if (!KMEsnd) StartT0();
-		UDR1 = KMEcmds[cmd][KMEsnd++]; 
+		UDR1 = KMEcmds[cmd][KMEsnd++];  // don't need to prevent overflow, we're not writing to the buffer
 	} else {
 		cbi(UCSR1B, UDRIE1);   // disable UDR Empty Interrupt
 		KMEidx = 0; KMEcs = 0; // also reset response buffer indexes
