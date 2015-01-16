@@ -133,10 +133,6 @@ volatile u16 bufTotalPETDelay = 0L;
 volatile u16 bufTotalLPGDist = 0L;
 volatile u16 bufTotalPETDist = 0L;
 
-// tank fill
-//volatile u32 totalLPGInTank = (50L * 1000L * 1000L * 10L);  // in microliters *10
-//volatile u32 totalPETInTank = (45L * 1000L * 1000L * 10L);
-
 inline u08 Nibble2Hex(u08 nibble)
 {
 	return ( (nibble <= 0x09)?(nibble + 0x30):(nibble - 9 + 0x40) );
@@ -161,7 +157,7 @@ static inline void CalcFuel(u16 cDelay) {
 	cycleStatus[cIdx] = DATA[LPGStatus];
 	// counting totals based on current fuel source - LPG/Petrol
 	cRPMs = (u32)(WORD(PDATA, LPGRPM) / 5 * cDelay);
-	cDist = (cycleVspeed[cIdx] * cDelay * 10/ 36);  // in centimeters!
+	cDist = (cycleVspeed[cIdx] * cDelay * 10 / 36);  // in centimeters!
 	if (cycleStatus[cIdx] == 5) {
 		cInjT = (u32)WORD(PDATA, LPGsuminjtime) * cRPMs;
 		cSpent = (u32)(cInjT / 2692800L * injFlowLPG);
@@ -204,14 +200,14 @@ static inline void CalcFuel(u16 cDelay) {
 		WORD(PDATA, cycleAvgLPGPerHour) = (u16)( (u32)(cycleTotalLPG) * (u32)(injFlowLPG * 6) / (u32)cycleTotalLPGDelay);
 	} else  WORD(PDATA, cycleAvgLPGPerHour) = 0L;
 	if (cycleTotalLPGDist) {
-		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * (u32)injFlowLPG / (u32)cycleTotalLPGDist / 60 );  // changed to centimeters
+		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * 10 * (u32)injFlowLPG / (u32)(cycleTotalLPGDist / 100 ) / 6 );  // changed to centimeters
 	} else  WORD(PDATA, cycleAvgLPGPer100) = 0L;
 	// now calc some Petrol
 	if (cycleTotalPETDelay) {
 		WORD(PDATA, cycleAvgPETPerHour) = (u16)( (u32)(cycleTotalPET) * (u32)(injFlowPET * 6) / (u32)cycleTotalPETDelay);
 	} else  WORD(PDATA, cycleAvgPETPerHour) = 0L;
 	if (cycleTotalPETDist) {
-		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * (u32)injFlowPET / (u32)cycleTotalPETDist / 60 );
+		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * 10 * (u32)injFlowPET / (u32)(cycleTotalPETDist / 100) / 6 );
 	} else  WORD(PDATA, cycleAvgPETPer100) = 0L;
 
 	// now fill 2nd buffer if 16th step filling 1st is active
@@ -240,11 +236,11 @@ static inline void CalcFuel(u16 cDelay) {
 
 		// now calc some LPG
 		if (bufTotalLPGDist) {
-			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * (u32)injFlowLPG / (u32)bufTotalLPGDist / 60 );
+			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * 10 * (u32)injFlowLPG / (u32)(bufTotalLPGDist / 100) / 6 );
 		} else  WORD(PDATA, bufAvgLPGPer100) = 0L;
 		// petrol
 		if (bufTotalPETDist) {
-			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * (u32)injFlowPET / (u32)bufTotalPETDist / 60 );
+			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * 10 * (u32)injFlowPET / (u32)(bufTotalPETDist / 100) / 6 );
 		} else  WORD(PDATA, bufAvgPETPer100) = 0L;
 
 		bIdx++;
