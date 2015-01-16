@@ -1,12 +1,11 @@
 #ifndef ONEWIRE_H
 #define ONEWIRE_H
-
-
-// запись
-#define P_DS PA7
   
 #include <util/delay.h>
 #include "avrlibdefs.h"
+
+// 1-wire connection pin
+#define P_DS PA7
 
 #define THERM_CMD_CONVERTTEMP 0x44
 #define THERM_CMD_RSCRATCHPAD 0xbe
@@ -22,13 +21,8 @@
  
 #define MAX_DEVICES 2 
 
-/*
- =======================================================================================================================
-	Функция OW_RESET -> сбрасывает шину 1-Wire и определяет наличие подключенных устройств.
-	Сигнал сброса должен быть длинной минимум 480 мкс.
- =======================================================================================================================
-*/
-unsigned char ow_reset(void)
+// reset 1-wire network and determine the presence of any 1-wire slave device
+u08 ow_reset(void)
 {
 	u08	pr, sreg;
 
@@ -47,62 +41,36 @@ unsigned char ow_reset(void)
 	return(pr);	
 }						
 
-/*
- =======================================================================================================================
-    WRITE_BIT -> запись бита в шину. 
- =======================================================================================================================
-*/
-void write_bit(char bitval)
+// write bit to 1-wire network
+static inline void write_bit(u08 bitval)
 {
 	u08 sreg;
 
 	sreg= SREG; cli();
-	cbi(PORTA, P_DS);               /* устанавливаем низкий уровень линии данных (DQ) */
+	cbi(PORTA, P_DS);              
 	sbi(DDRA, P_DS);
-	                        /* пауза 10us */
+	                       
 	_delay_us(10);
-	
-	if(bitval) cbi(DDRA, P_DS);/* устанвливаем высокий уровень линии данных (DQ),если записывается 1 */
-	                        /* ждем окончания временного интервала (70us) */
+	if(bitval) cbi(DDRA, P_DS);
 	_delay_us(70);
 	
-	cbi(DDRA, P_DS);               /* устанвливаем высокий уровень линии данных (DQ) */
+	cbi(DDRA, P_DS);             
 	SREG = sreg;
 }
 
-/*
- =======================================================================================================================
-    WRITE_BYTE -> запись байта в шину.
- =======================================================================================================================
-*/
-void write_byte(char val)
+// write byte to 1-wire network
+void write_byte(u08 val)
 {
-	/*~~~~~~~~~~~~~~~~~*/
-	unsigned char	i;
-	unsigned char	temp;
-	/*~~~~~~~~~~~~~~~~~*/
-
-
-	for(i = 0; i < 8; i++)	/* запись по одному биту */
-	{
-		temp = val >> i;	/* сдвигаем байт вправо на величину 'i' */
-		temp &= 0x01;		/* копируем младший бит в temp */
-		write_bit(temp);	/* записываем бит в шину */
-	}
-	sbi(PORTA, P_DS);               
+	for(u08 i = 0; i < 8; i++)	
+		write_bit( (val>>i) & 0b01 );	
+	sbi(PORTA, P_DS);               // raise the pin level immediately (for parasite power feed)
 	sbi(DDRA, P_DS);
 
-	                        /* ожидаем окончания временного интервала */
 	_delay_us(120);
-		
 }
 
-/*
- =======================================================================================================================
-    READ_BIT -> чтение бита из шины.
- =======================================================================================================================
-*/
-unsigned char read_bit(void)
+// read bit from 1-wire network
+static inline u08 read_bit(void)
 {
 	u08 sreg, r;
 
@@ -116,61 +84,38 @@ unsigned char read_bit(void)
 	_delay_us(10);
 	r = inb(PINA) & (1<<P_DS);
 	SREG = sreg;
-	return r;/* возвращаем значение линии данных (DQ) */
+	return r;
 }
 
-/*
- =======================================================================================================================
-    READ_BYTE -> чтение байта из шины.
- =======================================================================================================================
-*/
-unsigned char read_byte(void)
+// read byte from 1-wire network
+u08 read_byte(void)
 {
-	/*~~~~~~~~~~~~~~~~~~~~~~*/
-	unsigned char	i;
-	unsigned char	value = 0;
-	/*~~~~~~~~~~~~~~~~~~~~~~*/
+	u08 value = 0;
 
-	for(i = 0; i < 8; i++)
+	for(u08 i = 0; i < 8; i++)
 	{
-		if(read_bit()) value |= 0x01 << i;/* читаем один бит и записываем его в разряд i */
+		if(read_bit()) value |= (0b01 << i);
 		_delay_us(120);
-		
 	}
-
 	return(value);
 }
 
-/*
- =======================================================================================================================
-    calc_crc -> подсчет контрольной суммы.
- =======================================================================================================================
-*/
-char calc_crc(unsigned char* buff, char num_vals)
+// CRC8 calculation
+u08 calc_crc(u08* buff, u08 num_vals)
 {
-	/*~~~~~~~~~~~~~~~~~~~~~~*/
-	char	shift_reg = 0, 
-	        data_bit, 
-	        sr_lsb, 
-	        fb_bit, 
-	        i, 
-	        j;
-	/*~~~~~~~~~~~~~~~~~~~~~*/
+	u08	shift_reg = 0, data_bit, sr_lsb, fb_bit;
 
-	for(i = 0; i < num_vals; i++)
+	for(u08 i = 0; i < num_vals; i++)
 	{
-		for(j = 0; j < 8; j++)
+		for(u08 j = 0; j < 8; j++)
 		{
-			data_bit = (*buff >> j) & 0x01;
-			sr_lsb = shift_reg & 0x01;
-			fb_bit = (data_bit ^ sr_lsb) & 0x01;
+			data_bit = (*buff >> j) & 0b01;
+			sr_lsb = shift_reg & 0b01;
+			fb_bit = (data_bit ^ sr_lsb) & 0b01;
 			shift_reg = shift_reg >> 1;
-			if(fb_bit)
-			{
-				shift_reg = shift_reg ^ 0x8c;
-			}
+			if(fb_bit)  shift_reg = shift_reg ^ 0x8C;
 		}
-	buff++;
+		buff++;
 	}
 
 	return(shift_reg);
