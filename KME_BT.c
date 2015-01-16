@@ -402,8 +402,10 @@ int main (void) {
 			cli();  cmd = PCBuff[1];  PCgr = pcNone;  sei();
 			switch (cmd) {
 				case pcCmdRead: for (i=0; i<90; i++)  PCSend(DATA[i]); break;
-				case pcCmdAddLPG: 		cli(); DWORD(PDATA, totalLPGInTank) += DWORD(PPCBuff, 2); sei(); PCSend(pcCmdAddLPG); break;
-				case pcCmdAddPET: 		cli(); DWORD(PDATA, totalPETInTank) += DWORD(PPCBuff, 2); sei(); PCSend(pcCmdAddPET); break;
+				case pcCmdAddLPG: 		cli(); DWORD(PDATA, totalLPGInTank) += DWORD(PPCBuff, 2); sei(); 
+										WriteParamsEEPROM(); PCSend(pcCmdAddLPG); break;
+				case pcCmdAddPET: 		cli(); DWORD(PDATA, totalPETInTank) += DWORD(PPCBuff, 2); sei(); 
+										WriteParamsEEPROM(); PCSend(pcCmdAddPET); break;
 				case pcCmdResetTrip: 	cli();
 										DWORD(PDATA, tripLPGSpent) = 0; DWORD(PDATA, tripLPGTime) = 0; DWORD(PDATA, tripLPGDist) = 0; 
 										DWORD(PDATA, tripPETSpent) = 0; DWORD(PDATA, tripPETTime) = 0; DWORD(PDATA, tripPETDist) = 0;
