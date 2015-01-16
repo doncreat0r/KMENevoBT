@@ -161,7 +161,7 @@ static inline void CalcFuel(u16 cDelay) {
 	cycleStatus[cIdx] = DATA[LPGStatus];
 	// counting totals based on current fuel source - LPG/Petrol
 	cRPMs = (u32)(WORD(PDATA, LPGRPM) / 5 * cDelay);
-	cDist = (cycleVspeed[cIdx] * cDelay / 360);
+	cDist = (cycleVspeed[cIdx] * cDelay * 10/ 36);  // in centimeters!
 	if (cycleStatus[cIdx] == 5) {
 		cInjT = (u32)WORD(PDATA, LPGsuminjtime) * cRPMs;
 		cSpent = (u32)(cInjT / 2692800L * injFlowLPG);
@@ -171,7 +171,7 @@ static inline void CalcFuel(u16 cDelay) {
 		cycleTotalLPG += cycleInjTime[cIdx];
 		cycleTotalLPGDelay += cDelay;
 		DWORD(PDATA, tripLPGTime) += cDelay;
-		cycleTotalLPGDist += cDist;  // in meters
+		cycleTotalLPGDist += cDist;  // in centimeters!!
 		DWORD(PDATA, tripLPGDist) += cDist; 
 	} else {
 		cInjT = (u32)WORD(PDATA, PETsuminjtime) * cRPMs;
@@ -182,18 +182,18 @@ static inline void CalcFuel(u16 cDelay) {
 		cycleTotalPET += cycleInjTime[cIdx];
 		cycleTotalPETDelay += cDelay;
 		DWORD(PDATA, tripPETTime) += cDelay;
-		cycleTotalPETDist += cDist;  // in meters
+		cycleTotalPETDist += cDist;  // in centimeters
 		DWORD(PDATA, tripPETDist) += cDist; 
 	}
 	// remove the tail values from counters
 	if (cycleStatus[cTail] == 5){
 		cycleTotalLPG -= cycleInjTime[cTail];
 		cycleTotalLPGDelay -= cycleDelay[cTail];
-		cycleTotalLPGDist -= (cycleVspeed[cTail] * cycleDelay[cTail] / 360);
+		cycleTotalLPGDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
 	} else {
 		cycleTotalPET -= cycleInjTime[cTail];
 		cycleTotalPETDelay -= cycleDelay[cTail];
-		cycleTotalPETDist -= (cycleVspeed[cTail] * cycleDelay[cTail] / 360);
+		cycleTotalPETDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
 	}
 
 	WORD(PDATA, db1) = cycleTotalLPG;
@@ -204,14 +204,14 @@ static inline void CalcFuel(u16 cDelay) {
 		WORD(PDATA, cycleAvgLPGPerHour) = (u16)( (u32)(cycleTotalLPG) * (u32)(injFlowLPG * 6) / (u32)cycleTotalLPGDelay);
 	} else  WORD(PDATA, cycleAvgLPGPerHour) = 0L;
 	if (cycleTotalLPGDist) {
-		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * 10 * (u32)injFlowLPG / (u32)cycleTotalLPGDist / 6 );
+		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * (u32)injFlowLPG / (u32)cycleTotalLPGDist / 60 );  // changed to centimeters
 	} else  WORD(PDATA, cycleAvgLPGPer100) = 0L;
 	// now calc some Petrol
 	if (cycleTotalPETDelay) {
 		WORD(PDATA, cycleAvgPETPerHour) = (u16)( (u32)(cycleTotalPET) * (u32)(injFlowPET * 6) / (u32)cycleTotalPETDelay);
 	} else  WORD(PDATA, cycleAvgPETPerHour) = 0L;
 	if (cycleTotalPETDist) {
-		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * 10 * (u32)injFlowPET / (u32)cycleTotalPETDist / 6 );
+		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * (u32)injFlowPET / (u32)cycleTotalPETDist / 60 );
 	} else  WORD(PDATA, cycleAvgPETPer100) = 0L;
 
 	// now fill 2nd buffer if 16th step filling 1st is active
@@ -240,11 +240,11 @@ static inline void CalcFuel(u16 cDelay) {
 
 		// now calc some LPG
 		if (bufTotalLPGDist) {
-			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * 10 * (u32)injFlowLPG / (u32)bufTotalLPGDist / 6 );
+			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * (u32)injFlowLPG / (u32)bufTotalLPGDist / 60 );
 		} else  WORD(PDATA, bufAvgLPGPer100) = 0L;
 		// petrol
 		if (bufTotalPETDist) {
-			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * 10 * (u32)injFlowPET / (u32)bufTotalPETDist / 6 );
+			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * (u32)injFlowPET / (u32)bufTotalPETDist / 60 );
 		} else  WORD(PDATA, bufAvgPETPer100) = 0L;
 
 		bIdx++;
