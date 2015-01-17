@@ -169,7 +169,7 @@ static inline void CalcFuel(u16 cDelay) {
 		DWORD(PDATA, tripLPGTime) += cDelay;
 		cycleTotalLPGDist += cDist;  // in centimeters!!
 		DWORD(PDATA, tripLPGDist) += cDist; 
-	} else {
+	} else if (cycleStatus[cIdx] > 2) {  // status = 3 - driving on petrol, status = 4 - warming on petrol
 		cInjT = (u32)WORD(PDATA, PETsuminjtime) * cRPMs;
 		cSpent = (u32)(cInjT / 2692800L * injFlowPET);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );
@@ -186,7 +186,7 @@ static inline void CalcFuel(u16 cDelay) {
 		cycleTotalLPG -= cycleInjTime[cTail];
 		cycleTotalLPGDelay -= cycleDelay[cTail];
 		cycleTotalLPGDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
-	} else {
+	} else if (cycleStatus[cTail] > 2) {
 		cycleTotalPET -= cycleInjTime[cTail];
 		cycleTotalPETDelay -= cycleDelay[cTail];
 		cycleTotalPETDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
