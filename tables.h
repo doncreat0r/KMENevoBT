@@ -44,7 +44,10 @@
 #define OBDLTFT 28
 #define OBDerror 29
 #define OBDTPS 30
-#define OBDspare 31
+// error bits:
+// 0 - some LPG injector time much longer or shorter than others
+// 1 - some PET injector time much longer or shorter than others
+#define LPGerrBits 31
 
 // offsets for calculated values
 #define cycleAvgLPGPerHour 32
@@ -75,6 +78,8 @@
 #define tripPETTime 80
 
 #define eepromUpdateCount 84
+#define LPGinjFlow 86
+#define PETinjFlow 87
 
 // KME Nevo requests
 static volatile u08 KMEcmds[4][40] = {
@@ -92,14 +97,14 @@ static volatile u08 KMEcmds[4][40] = {
 			 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 };
 
+// some error ranges
+#define MaxInjDeviation 12
+#define MinInjDeviation 10 - (MaxInjDeviation - 10)
+
 // LPG/OBD data buffers
 volatile u08 DATA[200];
 volatile u16 PDATA = (u16)&DATA[0];
 volatile u16 DATAtimer = 0;
-
-// some constants
-volatile u08 injFlowLPG = 107;   // ml/min of fuel
-volatile u08 injFlowPET = 229;
 
 // 1st buffer - ~8s depth
 volatile u16 cycleInjTime[16];
@@ -160,7 +165,7 @@ static inline void CalcFuel(u16 cDelay) {
 	cDist = (cycleVspeed[cIdx] * cDelay * 10 / 36);  // in centimeters!
 	if (cycleStatus[cIdx] == 5) {
 		cInjT = (u32)WORD(PDATA, LPGsuminjtime) * cRPMs;
-		cSpent = (u32)(cInjT / 2692800L * injFlowLPG);
+		cSpent = (u32)(cInjT / 2692800L * DATA[LPGinjFlow]);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );  // /10 would be milliseconds
 		DWORD(PDATA, totalLPGInTank) -= cSpent;
 		DWORD(PDATA, tripLPGSpent) += cSpent;
@@ -171,7 +176,7 @@ static inline void CalcFuel(u16 cDelay) {
 		DWORD(PDATA, tripLPGDist) += cDist; 
 	} else if (cycleStatus[cIdx] > 2) {  // status = 3 - driving on petrol, status = 4 - warming on petrol
 		cInjT = (u32)WORD(PDATA, PETsuminjtime) * cRPMs;
-		cSpent = (u32)(cInjT / 2692800L * injFlowPET);
+		cSpent = (u32)(cInjT / 2692800L * DATA[PETinjFlow]);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );
 		DWORD(PDATA, totalPETInTank) -= cSpent;
 		DWORD(PDATA, tripPETSpent) += cSpent;
@@ -197,17 +202,17 @@ static inline void CalcFuel(u16 cDelay) {
 
 	// now calc some LPG
 	if (cycleTotalLPGDelay) {
-		WORD(PDATA, cycleAvgLPGPerHour) = (u16)( (u32)(cycleTotalLPG) * (u32)(injFlowLPG * 6) / (u32)cycleTotalLPGDelay);
+		WORD(PDATA, cycleAvgLPGPerHour) = (u16)( (u32)(cycleTotalLPG) * (u32)(DATA[LPGinjFlow] * 6) / (u32)cycleTotalLPGDelay);
 	} else  WORD(PDATA, cycleAvgLPGPerHour) = 0L;
 	if (cycleTotalLPGDist) {
-		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * 10 * (u32)injFlowLPG / (u32)(cycleTotalLPGDist / 100 ) / 6 );  // changed to centimeters
+		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * 10 * (u32)DATA[LPGinjFlow] / (u32)(cycleTotalLPGDist / 100 ) / 6 );  // changed to centimeters
 	} else  WORD(PDATA, cycleAvgLPGPer100) = 0L;
 	// now calc some Petrol
 	if (cycleTotalPETDelay) {
-		WORD(PDATA, cycleAvgPETPerHour) = (u16)( (u32)(cycleTotalPET) * (u32)(injFlowPET * 6) / (u32)cycleTotalPETDelay);
+		WORD(PDATA, cycleAvgPETPerHour) = (u16)( (u32)(cycleTotalPET) * (u32)(DATA[PETinjFlow] * 6) / (u32)cycleTotalPETDelay);
 	} else  WORD(PDATA, cycleAvgPETPerHour) = 0L;
 	if (cycleTotalPETDist) {
-		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * 10 * (u32)injFlowPET / (u32)(cycleTotalPETDist / 100) / 6 );
+		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * 10 * (u32)DATA[PETinjFlow] / (u32)(cycleTotalPETDist / 100) / 6 );
 	} else  WORD(PDATA, cycleAvgPETPer100) = 0L;
 
 	// now fill 2nd buffer if 16th step filling 1st is active
@@ -236,11 +241,11 @@ static inline void CalcFuel(u16 cDelay) {
 
 		// now calc some LPG
 		if (bufTotalLPGDist) {
-			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * 10 * (u32)injFlowLPG / (u32)(bufTotalLPGDist / 100) / 6 );
+			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * 10 * (u32)DATA[LPGinjFlow] / (u32)(bufTotalLPGDist / 100) / 6 );
 		} else  WORD(PDATA, bufAvgLPGPer100) = 0L;
 		// petrol
 		if (bufTotalPETDist) {
-			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * 10 * (u32)injFlowPET / (u32)(bufTotalPETDist / 100) / 6 );
+			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * 10 * (u32)DATA[PETinjFlow] / (u32)(bufTotalPETDist / 100) / 6 );
 		} else  WORD(PDATA, bufAvgPETPer100) = 0L;
 
 		bIdx++;
