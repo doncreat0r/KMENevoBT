@@ -356,10 +356,81 @@ u16 GetInjMin(u16 inj1, u16 inj2, u16 inj3, u16 inj4) {
 }
 
 /////////////////////////////////////////////////////////
+static inline void ParseLPGResponse() {
+	u16 tmp, inj1, inj2, inj3, inj4;
+	
+	cli(); // disable int for critical params
+	// reset timer counter
+	tmp = KMEtimeLPG;  KMEtimeLPG = 0;
+	// process LPG data ---------------
+	// injector time recalc
+	inj1 = (KMEBuff[3]<<8) + KMEBuff[4]; 
+	inj2 = (KMEBuff[5]<<8) + KMEBuff[6]; 
+	inj3 = (KMEBuff[7]<<8) + KMEBuff[8]; 
+	inj4 = (KMEBuff[9]<<8) + KMEBuff[10]; 
+	WORD(PDATA, PETsuminjtime) = inj1 + inj2 + inj3 + inj4;
+	// if injector max time much longer than others OR min time shorter than others - set alarm bit
+	if ( WORD(PDATA, PETsuminjtime) && 
+		(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) > MaxInjDeviation || 
+		 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) < MinInjDeviation) ) 
+		sbi(DATA[LPGerrBits], 0);
+	else
+		cbi(DATA[LPGerrBits], 0);
+	inj1 = (KMEBuff[19]<<8) + KMEBuff[20]; 
+	inj2 = (KMEBuff[21]<<8) + KMEBuff[22]; 
+	inj3 = (KMEBuff[23]<<8) + KMEBuff[24]; 
+	inj4 = (KMEBuff[25]<<8) + KMEBuff[26]; 
+	WORD(PDATA, LPGsuminjtime) = inj1 + inj2 + inj3 + inj4;
+	if ( WORD(PDATA, LPGsuminjtime) && 
+		(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) > MaxInjDeviation || 
+		 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) < MinInjDeviation) ) 
+		sbi(DATA[LPGerrBits], 1);
+	else
+		cbi(DATA[LPGerrBits], 1);
+	WORD(PDATA, LPGRPM) = (KMEBuff[35]<<8) + KMEBuff[36];
+	WORD(PDATA, LPGPcol) = (KMEBuff[41]<<8) + KMEBuff[42];
+	WORD(PDATA, LPGPsys) = (KMEBuff[43]<<8) + KMEBuff[44];
+	WORD(PDATA, LPGTred) = (KMEBuff[47]<<8) + KMEBuff[48];
+	WORD(PDATA, LPGTgas) = (KMEBuff[49]<<8) + KMEBuff[50];
+	WORD(PDATA, LPGVbat) = (KMEBuff[53]<<8) + KMEBuff[54];
+	DATA[LPGStatus] = KMEBuff[58];
+	sei();
+	// start calculating fuel consumption if RPM becomes nonzero
+	// save calculated to EEPROM if RPM becomes zero (engine stopped)
+	if (WORD(PDATA, LPGRPM)) {
+		startCalc = 1;
+	} else {
+		if (startCalc) { WriteParamsEEPROM(); }
+		startCalc = 0;
+	}
+	if (startCalc)  CalcFuel(tmp);
+	sbi(PINC, PLED);
+}
+
+/////////////////////////////////////////////////////////
+static inline void ParseOBDResponse() {
+
+	cli();   // disable int for critical params
+	KMEtimeOBD = 0;
+	WORD(PDATA, OBDRPM) = (KMEBuff[31]<<8) + KMEBuff[32];
+	DATA[OBDSpeed] = KMEBuff[33];
+	sei();
+	DATA[OBDLoad]  = KMEBuff[34];
+	DATA[OBDECT]   = KMEBuff[35];
+	DATA[OBDMAP]   = KMEBuff[36];
+	DATA[OBDTA]    = KMEBuff[37];
+	DATA[OBDIAT]   = KMEBuff[38];
+	DATA[OBDSTFT]  = KMEBuff[27];
+	DATA[OBDLTFT]  = KMEBuff[28];
+	DATA[OBDerror] = KMEBuff[26];
+	DATA[OBDTPS]   = KMEBuff[41];
+	sbi(PINC, PLED);
+}
+
+/////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
 int main (void) {
 
-	u16 tmp, inj1, inj2, inj3, inj4;
 	u08 i, cmd, tempEnabled;
 	u08 temp[9];
 
@@ -441,71 +512,13 @@ int main (void) {
 		}
 		if (KMEgr) {
 			KMEgr = 0;
-			// if we got 0x06 (LPG info) response - parse it
-			if (KMEBuff[2] == bRespLPG) {
-				cli(); // disable int for critical params
-				// reset timer counter
-				tmp = KMEtimeLPG;  KMEtimeLPG = 0;
-				// process LPG data ---------------
-				// injector time recalc
-				inj1 = (KMEBuff[3]<<8) + KMEBuff[4]; 
-				inj2 = (KMEBuff[5]<<8) + KMEBuff[6]; 
-				inj3 = (KMEBuff[7]<<8) + KMEBuff[8]; 
-				inj4 = (KMEBuff[9]<<8) + KMEBuff[10]; 
-				WORD(PDATA, PETsuminjtime) = inj1 + inj2 + inj3 + inj4;
-				if ( WORD(PDATA, PETsuminjtime) && 
-					(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) > MaxInjDeviation || 
-					 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) < MinInjDeviation) ) 
-					sbi(DATA[LPGerrBits], 0);
-				else
-					cbi(DATA[LPGerrBits], 0);
-				inj1 = (KMEBuff[19]<<8) + KMEBuff[20]; 
-				inj2 = (KMEBuff[21]<<8) + KMEBuff[22]; 
-				inj3 = (KMEBuff[23]<<8) + KMEBuff[24]; 
-				inj4 = (KMEBuff[25]<<8) + KMEBuff[26]; 
-				WORD(PDATA, LPGsuminjtime) = inj1 + inj2 + inj3 + inj4;
-				if ( WORD(PDATA, LPGsuminjtime) && 
-					(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) > MaxInjDeviation || 
-					 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) < MinInjDeviation) ) 
-					sbi(DATA[LPGerrBits], 1);
-				else
-					cbi(DATA[LPGerrBits], 1);
-				WORD(PDATA, LPGRPM) = (KMEBuff[35]<<8) + KMEBuff[36];
-				WORD(PDATA, LPGPcol) = (KMEBuff[41]<<8) + KMEBuff[42];
-				WORD(PDATA, LPGPsys) = (KMEBuff[43]<<8) + KMEBuff[44];
-				WORD(PDATA, LPGTred) = (KMEBuff[47]<<8) + KMEBuff[48];
-				WORD(PDATA, LPGTgas) = (KMEBuff[49]<<8) + KMEBuff[50];
-				WORD(PDATA, LPGVbat) = (KMEBuff[53]<<8) + KMEBuff[54];
-				DATA[LPGStatus] = KMEBuff[58];
-				sei();
-				// start calculating fuel consumption if RPM becomes nonzero
-				// save calculated to EEPROM if RPM becomes zero (engine stopped)
-				if (WORD(PDATA, LPGRPM)) {
-					startCalc = 1;
-				} else {
-					if (startCalc) { WriteParamsEEPROM(); }
-					startCalc = 0;
-				}
-				if (startCalc)  CalcFuel(tmp);
-				sbi(PINC, PLED);
-			}
-			// if we got 0xB1 (OBD info) response - parse it
-			if (KMEBuff[2] == bRespOBD) {
-				cli();   // disable int for critical params
-				KMEtimeOBD = 0;
-				WORD(PDATA, OBDRPM) = (KMEBuff[31]<<8) + KMEBuff[32];
-				DATA[OBDSpeed] = KMEBuff[33];
-				sei();
-				DATA[OBDLoad]  = KMEBuff[34];
-				DATA[OBDECT]   = KMEBuff[35];
-				DATA[OBDMAP]   = KMEBuff[36];
-				DATA[OBDTA]    = KMEBuff[37];
-				DATA[OBDIAT]   = KMEBuff[38];
-				DATA[OBDSTFT]  = KMEBuff[27];
-				DATA[OBDLTFT]  = KMEBuff[28];
-				DATA[OBDerror] = KMEBuff[26];
-				DATA[OBDTPS]   = KMEBuff[41];
-				sbi(PINC, PLED);
+			switch (KMEBuff[2]) {
+				case bRespLPG:  // got 0x06 (LPG info) 
+					ParseLPGResponse();
+					break;
+				case bRespOBD:  // got 0xB1 (OBD info) 
+					ParseOBDResponse();
+					break;
 			}
 			// check for valid response
 			if (PTmode < modeTransparent) {
