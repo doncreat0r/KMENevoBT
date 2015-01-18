@@ -246,6 +246,8 @@ void InitParams(void) {
 	UCSR0C = 1<<UCSZ01|1<<UCSZ00|0<<USBS1; 
 
 	DATAtimer = 100*28;
+	DATA[LPGinjFlow] = 229;
+	DATA[PETinjFlow] = 107;
 }
 
 /////////////////////////////////////////////////////////
@@ -254,9 +256,9 @@ void ReadParamsEEPROM(void) {
 	u32 tmp32;
 
 	tmp = eeprom_read_byte((u08*)0);
-	if (tmp < 0xFF)  injFlowLPG = tmp;
+	if (tmp < 0xFF)  DATA[LPGinjFlow] = tmp;
 	tmp = eeprom_read_byte((u08*)1);
-	if (tmp < 0xFF)  injFlowPET = tmp;
+	if (tmp < 0xFF)  DATA[PETinjFlow] = tmp;
 	EEPROMUpdates = eeprom_read_word((uint16_t*)10);
 
 	tmp32 = eeprom_read_dword((uint32_t*)2);
@@ -337,10 +339,27 @@ ISR(PCINT0_vect) {
 }
 
 /////////////////////////////////////////////////////////
+u16 GetInjMax(u16 inj1, u16 inj2, u16 inj3, u16 inj4) {
+	u16 tmp = inj1;
+	if (inj2 > tmp) tmp = inj2;
+	if (inj3 > tmp) tmp = inj3;
+	if (inj4 > tmp) tmp = inj4;
+	return tmp;
+}
+/////////////////////////////////////////////////////////
+u16 GetInjMin(u16 inj1, u16 inj2, u16 inj3, u16 inj4) {
+	u16 tmp = inj1;
+	if (inj2 < tmp) tmp = inj2;
+	if (inj3 < tmp) tmp = inj3;
+	if (inj4 < tmp) tmp = inj4;
+	return tmp;
+}
+
+/////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
 int main (void) {
 
-	u16 tmp;
+	u16 tmp, inj1, inj2, inj3, inj4;
 	u08 i, cmd, tempEnabled;
 	u08 temp[9];
 
@@ -412,8 +431,8 @@ int main (void) {
 										sei();
 										PCSend(pcCmdResetTrip);
 										break;
-				case pcCmdSetLPGInjFlow: injFlowLPG = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)0, injFlowLPG); PCSend(pcCmdSetLPGInjFlow); break;
-				case pcCmdSetPETInjFLow: injFlowPET = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)1, injFlowPET); PCSend(pcCmdSetPETInjFLow); break;
+				case pcCmdSetLPGInjFlow: DATA[LPGinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)0, DATA[LPGinjFlow]); PCSend(pcCmdSetLPGInjFlow); break;
+				case pcCmdSetPETInjFLow: DATA[PETinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)1, DATA[PETinjFlow]); PCSend(pcCmdSetPETInjFLow); break;
 				case pcCmdReboot: 		PCSend('$');
 										sbi(UCSR0B, UDRIE0);  				// explicitly enable UDRIE0 before reset
 										wdt_enable(1); cli(); while(1); break;
@@ -425,12 +444,32 @@ int main (void) {
 			// if we got 0x06 (LPG info) response - parse it
 			if (KMEBuff[2] == bRespLPG) {
 				cli(); // disable int for critical params
+				// reset timer counter
 				tmp = KMEtimeLPG;  KMEtimeLPG = 0;
-				// process LPG data
-				WORD(PDATA, PETsuminjtime) = 
-				       (KMEBuff[3]<<8) + KMEBuff[4] + (KMEBuff[5]<<8) + KMEBuff[6] + (KMEBuff[7]<<8) + KMEBuff[8] + (KMEBuff[9]<<8) + KMEBuff[10];
-				WORD(PDATA, LPGsuminjtime) = 
-				       (KMEBuff[19]<<8) + KMEBuff[20] + (KMEBuff[21]<<8) + KMEBuff[22] + (KMEBuff[23]<<8) + KMEBuff[24] + (KMEBuff[25]<<8) + KMEBuff[26];
+				// process LPG data ---------------
+				// injector time recalc
+				inj1 = (KMEBuff[3]<<8) + KMEBuff[4]; 
+				inj2 = (KMEBuff[5]<<8) + KMEBuff[6]; 
+				inj3 = (KMEBuff[7]<<8) + KMEBuff[8]; 
+				inj4 = (KMEBuff[9]<<8) + KMEBuff[10]; 
+				WORD(PDATA, PETsuminjtime) = inj1 + inj2 + inj3 + inj4;
+				if ( WORD(PDATA, PETsuminjtime) && 
+					(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) > MaxInjDeviation || 
+					 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) < MinInjDeviation) ) 
+					sbi(DATA[LPGerrBits], 0);
+				else
+					cbi(DATA[LPGerrBits], 0);
+				inj1 = (KMEBuff[19]<<8) + KMEBuff[20]; 
+				inj2 = (KMEBuff[21]<<8) + KMEBuff[22]; 
+				inj3 = (KMEBuff[23]<<8) + KMEBuff[24]; 
+				inj4 = (KMEBuff[25]<<8) + KMEBuff[26]; 
+				WORD(PDATA, LPGsuminjtime) = inj1 + inj2 + inj3 + inj4;
+				if ( WORD(PDATA, LPGsuminjtime) && 
+					(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) > MaxInjDeviation || 
+					 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) < MinInjDeviation) ) 
+					sbi(DATA[LPGerrBits], 1);
+				else
+					cbi(DATA[LPGerrBits], 1);
 				WORD(PDATA, LPGRPM) = (KMEBuff[35]<<8) + KMEBuff[36];
 				WORD(PDATA, LPGPcol) = (KMEBuff[41]<<8) + KMEBuff[42];
 				WORD(PDATA, LPGPsys) = (KMEBuff[43]<<8) + KMEBuff[44];
