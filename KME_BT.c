@@ -22,13 +22,16 @@
 // modes
 // 0, 1, 2, 3 - current cmd to xmit
 // 4 - modeWait bit
-#define modeSearch 0				// automatic search for KME Nevo ECU
-#define modeSetOBD 1				// set required PIDs for OBD (may be wait until OBD initialization?)
-#define modeReadLPG 2				// transmit 'read current values' command
-#define modeReadOBD 3				// transmit 'read OBD' command
-#define modeWait 4					// wait for response or timeout, than switch to modeSearching or modeReadXXX based on response buffer 
+#define modeSearch 0				// automatic search for KME Nevo ECU 
+#define modeGetOBD 1				// send "GET OBD Config" command
+#define modeSetOBD 2				// set required PIDs for OBD (may be wait until OBD initialization?)
+#define modeReadLPG 3				// transmit 'read current values' command
+#define modeReadOBD 4				// transmit 'read OBD' command
+#define modeWait 8					// wait for response or timeout, than switch to modeSearching or modeReadXXX based on response buffer 
 #define modeTransparent 32			// transparent passsthrough mode
 #define modePassthrough 48			// passthrough mode until reboot (explicitly selectable, for tuning the Bluetooth module, etc.)
+
+#define modeMask 0b111
 
 #define pcNone 0
 #define pcRcvCmd 1					// receiving cmd from PC
@@ -137,7 +140,7 @@ ISR(USART1_UDRE_vect)
 {
 	u08 cmd;
 
-	cmd = PTmode & 0b11;
+	cmd = PTmode & modeMask;
 	// if not in transparent mode - send cmd 
 	if ((PTmode < modeTransparent) && (KMEsnd < KMEcmds[cmd][1])) {
 		if (!KMEsnd) StartT0();
@@ -293,7 +296,7 @@ ISR(SIG_OVERFLOW0) {
 		cbi(TIMSK0, TOIE0);	 // disable overflow
 		// now next cmd
 		if (PTmode & modeWait) {
-			PTmode = PTmode & 0b11;
+			PTmode = PTmode & modeMask;
 		} else {
 			if (PTmode == modeTransparent)  PTmode = modeSearch;  // if timeout in transparent - means no frames, so switch to search mode
 		}
@@ -305,7 +308,7 @@ ISR(SIG_OVERFLOW2) {
 
 	TCNT2 = T2delay;  // reload timer overflow
 
-	if (((PTmode & 0b11) > modeSetOBD) || (PTmode == modeTransparent)) {
+	if (((PTmode & modeMask) > modeSetOBD) || (PTmode == modeTransparent)) {
 		KMEtimeLPG++;
 		KMEtimeOBD++;
 		// if got timeout receiving 
@@ -522,9 +525,22 @@ int main (void) {
 			}
 			// check for valid response
 			if (PTmode < modeTransparent) {
-			    PTmode = PTmode & 0b11;
+			    PTmode = PTmode & modeMask;
 				switch (PTmode) {
-					case modeSearch: if ((KMEBuff[0] == bRespKME) && (KMEBuff[1] == 0x11) && (KMEBuff[2] == 0x01))  PTmode++; break;
+					case modeSearch: if ((KMEBuff[0] == bRespKME) && (KMEBuff[1] == 0x11) && (KMEBuff[2] == 0x01)) PTmode++; break;
+					case modeGetOBD:
+						if ((KMEBuff[0] == bRespKME) && (KMEBuff[1] == 0x26) && (KMEBuff[2] == 0xB3)) {
+							cli();
+							// now copy current OBD config (except 3 bytes of PID config) to SetOBD request
+							KMEcmds[modeSetOBD][37] = 0;
+							for (i=0; i<37; i++) {
+								if (i > 5) KMEcmds[modeSetOBD][i] = KMEBuff[i];
+								KMEcmds[modeSetOBD][37] += KMEcmds[modeSetOBD][i];
+							}
+						 	PTmode++; 
+							sei();
+						}
+						break;
 					case modeReadOBD: PTmode = modeReadLPG; break;
 					default: PTmode++; break;
 				}
