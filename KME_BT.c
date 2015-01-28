@@ -20,8 +20,8 @@
 #define T2delay (255 - 108)
 
 // modes
-// 0, 1, 2, 3 - current cmd to xmit
-// 4 - modeWait bit
+// 0, 1, 2, 3, 4, ... - current cmd to xmit
+// 8 - modeWait 4th bit
 #define modeSearch 0				// automatic search for KME Nevo ECU 
 #define modeGetOBD 1				// send "GET OBD Config" command
 #define modeSetOBD 2				// set required PIDs for OBD (may be wait until OBD initialization?)
@@ -31,7 +31,7 @@
 #define modeTransparent 32			// transparent passsthrough mode
 #define modePassthrough 48			// passthrough mode until reboot (explicitly selectable, for tuning the Bluetooth module, etc.)
 
-#define modeMask 0b111
+#define modeMask 0b111				// modeWait-1
 
 #define pcNone 0
 #define pcRcvCmd 1					// receiving cmd from PC
@@ -68,6 +68,7 @@ volatile u08 PChead = 0, PCtail = 0;
 volatile u08 PCidx = 0;
 volatile u08 PCcs = 0;
 volatile u08 PCgr = 0;
+volatile u08 PCread = 0; 			// if >0 - readmode, send buffer to PC after each CalcFuel, if >90, set PCread = 0;
 volatile u08 PCtimeout = 0;
 volatile u08 PCCmdTimeout = 0;
 
@@ -186,8 +187,8 @@ ISR(USART0_RX_vect)
 	// if not transparent mode and got 1st byte and its the request start - go to transparent mode (temporarly)
 	if ((PTmode < modeTransparent) && (PCidx == 1)) {
 		switch (RS) {
-	  		case bReqKME: PTmode = modeTransparent; break;
-	  		case  bReqPC: PTmode = modePassthrough; break;
+	  		case bReqKME: PTmode = modeTransparent; PCread = 0; break;
+	  		case  bReqPC: PTmode = modePassthrough; PCread = 0; break;
 			case bReqBuf: PCgr = pcRcvCmd; break;
 			default: PCidx = 0; break; // just ignore the garbage as a 1st symbol
 	  	}
@@ -336,10 +337,10 @@ ISR(SIG_OVERFLOW2) {
 }
 
 /////////////////////////////////////////////////////////
-ISR(PCINT0_vect) {
-	PCSend('!');
-	tempMode = 2;
-}
+//ISR(PCINT0_vect) {
+//	PCSend('!');
+//	tempMode = 2;
+//}
 
 /////////////////////////////////////////////////////////
 u16 GetInjMax(u16 inj1, u16 inj2, u16 inj3, u16 inj4) {
@@ -494,19 +495,18 @@ int main (void) {
 		if (PCgr == pcCmdOK) {
 			cli();  cmd = PCBuff[1];  PCgr = pcNone;  sei();
 			switch (cmd) {
-				case pcCmdRead: for (i=0; i<90; i++)  PCSend(DATA[i]); break;
+				case pcCmdRead: PCread = 1; break; //for (i=0; i<90; i++)  PCSend(DATA[i]); break;
 				case pcCmdAddLPG: 		cli(); DWORD(PDATA, totalLPGInTank) += DWORD(PPCBuff, 2); sei(); 
-										WriteParamsEEPROM(); PCSend(pcCmdAddLPG); break;
+										WriteParamsEEPROM(); break;
 				case pcCmdAddPET: 		cli(); DWORD(PDATA, totalPETInTank) += DWORD(PPCBuff, 2); sei(); 
-										WriteParamsEEPROM(); PCSend(pcCmdAddPET); break;
+										WriteParamsEEPROM(); break;
 				case pcCmdResetTrip: 	cli();
 										DWORD(PDATA, tripLPGSpent) = 0; DWORD(PDATA, tripLPGTime) = 0; DWORD(PDATA, tripLPGDist) = 0; 
 										DWORD(PDATA, tripPETSpent) = 0; DWORD(PDATA, tripPETTime) = 0; DWORD(PDATA, tripPETDist) = 0;
 										sei();
-										PCSend(pcCmdResetTrip);
 										break;
-				case pcCmdSetLPGInjFlow: DATA[LPGinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)0, DATA[LPGinjFlow]); PCSend(pcCmdSetLPGInjFlow); break;
-				case pcCmdSetPETInjFLow: DATA[PETinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)1, DATA[PETinjFlow]); PCSend(pcCmdSetPETInjFLow); break;
+				case pcCmdSetLPGInjFlow: DATA[LPGinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)0, DATA[LPGinjFlow]); break;
+				case pcCmdSetPETInjFLow: DATA[PETinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)1, DATA[PETinjFlow]); break;
 				case pcCmdReboot: 		PCSend('$');
 										sbi(UCSR0B, UDRIE0);  				// explicitly enable UDRIE0 before reset
 										wdt_enable(1); cli(); while(1); break;
@@ -518,6 +518,7 @@ int main (void) {
 			switch (KMEBuff[2]) {
 				case bRespLPG:  // got 0x06 (LPG info) 
 					ParseLPGResponse();
+					if (PCread)  PCread = 1; // send buffer
 					break;
 				case bRespOBD:  // got 0xB1 (OBD info) 
 					ParseOBDResponse();
@@ -550,6 +551,11 @@ int main (void) {
 		if (PTmode < modeWait) {
 			PTmode = PTmode | modeWait;
 			sbi(UCSR1B, UDRIE1);
+		}
+		// handling PC DATA buffer sending
+		if (PCread && PCread <= 90) {
+			PCSend(DATA[PCread - 1]);
+			PCread++;
 		}
 		if (PChead != PCtail)
 		{
