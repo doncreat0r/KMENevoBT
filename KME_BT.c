@@ -30,6 +30,7 @@
 #define modeWait 8					// wait for response or timeout, than switch to modeSearching or modeReadXXX based on response buffer 
 #define modeTransparent 32			// transparent passsthrough mode
 #define modePassthrough 48			// passthrough mode until reboot (explicitly selectable, for tuning the Bluetooth module, etc.)
+#define modeParkAssist 64			// used only for DATA[2]	
 
 #define modeMask 0b111				// modeWait-1
 
@@ -77,6 +78,14 @@ volatile u08 startCalc = 0L; 		// start calc after RPM > 0
 volatile u16 EEPROMUpdates = 0L;	// number of EEPROM updates
 volatile u08 tempMode = 0;			// tempMode: 0 - skiprom/begin measure, 1 - wait for measure end, 2 - read temp value
 
+// park assist decoder
+volatile u08 PAstep = 0; // steps are: sync, pause, 1st byte, 2nd byte, pause, 3rd byte, 4th byte, last bit, finish
+volatile u08 PAcnt = 0;
+volatile u08 PAchanged = 0;
+volatile u16 PAdata[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
+volatile u16 PAdata_old[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
+
+
 // ======================================================
 // Send byte to PC
 void PCSend(u08 data)
@@ -107,6 +116,88 @@ static inline void StartT2(void) {
 }
 
 // ======================================================
+ISR(PCINT3_vect) {
+	u16 tmr;
+	u08 prk;
+	tmr = TCNT1;
+	TCNT1 = 0;		// always rearm the timer
+	prk = PIND & BV(PARK);
+	if (prk)  DATA[workMode] = modeParkAssist;
+	switch (PAstep) {
+		case 0: // no sync, got 1st positive front
+			if (prk) {
+				PAstep++;  PAcnt = 0;  // next step is sync count, zero sync counter 
+			}
+			break;
+		case 1:
+			if (tmr > 16 && tmr < 20)  // if time from last change between 0,37 ms and 0,64 ms
+				PAcnt++;
+			else
+				PAstep = 0;
+			if (PAcnt > 9)  PAstep++;
+			break;
+		case 2: // expect a long pulse
+			if (tmr > 41 && tmr < 46 && !(prk))  // long pulse is 1ms
+				PAstep++;
+			else 
+				PAstep = 0;
+			break;
+		case 3: // expect a 2ms pause - assuming we are at 1st positive edge of 1st message bit
+			if (tmr > 82 && tmr < 90 && prk) {  // long pause is 2ms
+				PAstep++;
+				PAcnt = 0;
+				PAdata[0] = 0;
+			} else 	
+				PAstep = 0;
+			break;
+		case 4: // decode 1st word - assuming we are at Nth bit negative edge
+			if (!(prk)) {
+				if (tmr > 10 && tmr < 20) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
+					PAdata[0] |= (1<<PAcnt);
+					PAcnt++;
+				} else {
+					if (tmr > 23 && tmr < 33)   // zerobit is about 0.33 ms, onebit is about 0.66 ms
+						PAcnt++;
+					else 
+						PAstep = 0;
+				}
+			}
+			if (PAcnt > 15)  PAstep++;
+			if (tmr > 200)  PAstep = 0;
+			break;
+		case 5:  // expect another pause for ~4.3 ms
+			if (tmr > 172 && tmr < 212 && prk) {  // another long pause is ~4.3ms
+				PAcnt = 0;
+				PAdata[1] = 0;
+				PAstep++;
+			} else 
+				PAstep = 0;
+			break;
+		case 6:
+			if (!(prk)) {
+				if (tmr > 10 && tmr < 22) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
+					PAdata[1] |= (1<<PAcnt);
+					PAcnt++;
+				} else {
+					if (tmr > 23 && tmr < 33)   // zerobit is about 0.33 ms, onebit is about 0.66 ms
+						PAcnt++;
+					else 
+						PAstep = 0;
+				}
+			}
+			if (PAcnt > 15)  PAstep++;
+			if (tmr > 200)  PAstep = 0;
+			break;
+		case 7:
+			PAchanged = 1;
+			PAstep++;
+			break;
+		default:
+			PAstep = 0;
+			PAcnt = 0;
+	}
+}
+
 // ======================================================
 // ======================================================
 ISR(USART1_RX_vect)
@@ -234,7 +325,7 @@ ISR(USART0_RX_vect)
 void InitParams(void) {
 
 	DATA[0] = 0x42;
-	DATA[1] = 0x24;
+	DATA[1] = 0x00;
 
 	UBRR1L = LO(brd9600);
 	UBRR1H = HI(brd9600);
@@ -250,8 +341,8 @@ void InitParams(void) {
 	UCSR0C = 1<<UCSZ01|1<<UCSZ00|0<<USBS1; 
 
 	DATAtimer = 100*28;
-	DATA[LPGinjFlow] = 229;
-	DATA[PETinjFlow] = 107;
+	DATA[LPGinjFlow] = 175;  
+	DATA[PETinjFlow] = 177; // doubled in the formula
 }
 
 /////////////////////////////////////////////////////////
@@ -305,6 +396,12 @@ ISR(SIG_OVERFLOW0) {
 }
 
 /////////////////////////////////////////////////////////
+ISR(SIG_OVERFLOW1) {
+	PAstep = 0;
+	PAcnt = 0;
+}
+
+/////////////////////////////////////////////////////////
 ISR(SIG_OVERFLOW2) {
 
 	TCNT2 = T2delay;  // reload timer overflow
@@ -322,8 +419,6 @@ ISR(SIG_OVERFLOW2) {
 			}
 		}
 	}
-
-
 	// timeout receiving cmd from own custom software
 	if (PCgr) {
 		PCCmdTimeout++;
@@ -335,12 +430,6 @@ ISR(SIG_OVERFLOW2) {
 	// used for 1wire temperature readings
 	DATAtimer++;
 }
-
-/////////////////////////////////////////////////////////
-//ISR(PCINT0_vect) {
-//	PCSend('!');
-//	tempMode = 2;
-//}
 
 /////////////////////////////////////////////////////////
 u16 GetInjMax(u16 inj1, u16 inj2, u16 inj3, u16 inj4) {
@@ -441,6 +530,7 @@ int main (void) {
 	wdt_disable();
 	InitParams();
 
+	cbi(DDRD, PARK);
 	sbi(DDRC, PLED);
 	sbi(DDRA, P_DS);
 	sbi(PORTA, P_DS);           
@@ -454,6 +544,16 @@ int main (void) {
 	cbi(TIMSK2, TOIE2);	 // disable overflow
 	sbi(TIFR2, TOV2);
 	ReadParamsEEPROM();
+
+	// park assist init
+	PCMSK3 = (1<<PCINT28);
+	PCICR = (1<<PCIE3);
+
+	TCCR1A = 0;
+	TCCR1B = 0b100;		// prescaler/256
+	sbi(TIFR1, TOV1);						// reset overflow flag
+	TCNT1 = 0; // reload timer overflow
+	sbi(TIMSK1, TOIE1);	   // enable overflow
 
 	sei();
 	StartT2();  // start 10ms counting helper timer immediately
@@ -492,6 +592,24 @@ int main (void) {
 			DATAtimer = 0;
 			tempMode = 0;
 		}
+		// park assist data
+		if (PAchanged) {
+			cli();
+			PAchanged = 0;
+			if (PAdata_old[0] != PAdata[0] || PAdata_old[1] != PAdata[1]) {
+				PAdata_old[0] = PAdata[0]; PAdata_old[1] = PAdata[1];
+				WORD(PDATA, PAdata1) = PAdata_old[0];
+				WORD(PDATA, PAdata2) = PAdata_old[1];
+				if (PCread)  PCread = 1; // send buffer
+			}
+			sei();
+		}
+		if (DATA[workMode] == modeParkAssist && TCNT1 > 10000) {
+			DATA[workMode] = PTmode;
+			WORD(PDATA, PAdata1) = 0;
+			WORD(PDATA, PAdata2) = 0;
+		}
+		// incoming commands
 		if (PCgr == pcCmdOK) {
 			cli();  cmd = PCBuff[1];  PCgr = pcNone;  sei();
 			switch (cmd) {
@@ -513,18 +631,22 @@ int main (void) {
 
 			} // switch
 		}
+		// this status is set if we've got valid response from KME, doesn't matter who's requested it
 		if (KMEgr) {
 			KMEgr = 0;
 			switch (KMEBuff[2]) {
 				case bRespLPG:  // got 0x06 (LPG info) 
 					ParseLPGResponse();
-					if (PCread)  PCread = 1; // send buffer
+					if (PCread && DATA[workMode] < modeParkAssist) {
+						PCread = 1; // send buffer
+						DATA[workMode] = PTmode;
+					}
 					break;
 				case bRespOBD:  // got 0xB1 (OBD info) 
 					ParseOBDResponse();
 					break;
 			}
-			// check for valid response
+			// check for valid response to our own request and switch to next request 
 			if (PTmode < modeTransparent) {
 			    PTmode = PTmode & modeMask;
 				switch (PTmode) {
@@ -547,7 +669,7 @@ int main (void) {
 				}
 			}
 		}  // KMEgr
-		// handling current work mode
+		// if current mode w/o wait bit - set wait bit and initiate request sending
 		if (PTmode < modeWait) {
 			PTmode = PTmode | modeWait;
 			sbi(UCSR1B, UDRIE1);
@@ -559,7 +681,6 @@ int main (void) {
 		}
 		if (PChead != PCtail)
 		{
-			DATA[workMode] = PTmode;
 			sbi(UCSR0B, UDRIE0);  // enable UDR Empty Interrupt
 		}
 	}

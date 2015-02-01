@@ -11,6 +11,7 @@
 #define DWORD(arr, addr) (*(volatile u32*)((addr)+arr))
 
 #define PLED	PC3
+#define PARK	PD4
 
 #define bReqKME 0xC3
 #define bRespKME 0xD3
@@ -65,8 +66,8 @@
 #define totalPETInTank 50
 
 // debug
-#define db1 54
-#define db2 56
+#define PAdata1 54
+#define PAdata2 56
 
 // avg per trip
 // avg consumption per 100 km calculated from Spent and Dist in the client!
@@ -164,10 +165,11 @@ static inline void CalcFuel(u16 cDelay) {
 	cycleVspeed[cIdx] = DATA[OBDSpeed];
 	cycleStatus[cIdx] = DATA[LPGStatus];
 	// counting totals based on current fuel source - LPG/Petrol
+	// TODO: normalize LPG inj time with (Psys-Pcol) and Tgas, is Psys absolute?
 	cRPMs = (u32)(WORD(PDATA, LPGRPM) / 5 * cDelay);
 	cDist = (cycleVspeed[cIdx] * cDelay * 10 / 36);  // in centimeters!
 	if (cycleStatus[cIdx] == 5) {
-		cInjT = (u32)WORD(PDATA, LPGsuminjtime) * cRPMs;
+		cInjT = (u32)WORD(PDATA, LPGsuminjtime) * cRPMs;  
 		cSpent = (u32)(cInjT / 2692800L * DATA[LPGinjFlow]);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );  // /10 would be milliseconds
 		DWORD(PDATA, totalLPGInTank) -= cSpent;
@@ -177,8 +179,8 @@ static inline void CalcFuel(u16 cDelay) {
 		DWORD(PDATA, tripLPGTime) += cDelay;
 		cycleTotalLPGDist += cDist;  // in centimeters!!
 		DWORD(PDATA, tripLPGDist) += cDist; 
-	} else if (cycleStatus[cIdx] > 2) {  // status = 3 - driving on petrol, status = 4 - warming on petrol
-		cInjT = (u32)WORD(PDATA, PETsuminjtime) * cRPMs;
+	} else if (cycleStatus[cIdx] > 2 && cRPMs > 0) {  // if RPM > 0 and status = 3 - driving on petrol, status = 4 - warming on petrol
+		cInjT = (u32)WORD(PDATA, PETsuminjtime) * cRPMs * 2; // doubling to fit pet injflow to 1 byte
 		cSpent = (u32)(cInjT / 2692800L * DATA[PETinjFlow]);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );
 		DWORD(PDATA, totalPETInTank) -= cSpent;
@@ -200,8 +202,8 @@ static inline void CalcFuel(u16 cDelay) {
 		cycleTotalPETDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
 	}
 
-	WORD(PDATA, db1) = cycleTotalLPG;
-	WORD(PDATA, db2) = cycleTotalLPGDelay;
+	//WORD(PDATA, db1) = cycleTotalLPG;
+	//WORD(PDATA, db2) = cycleTotalLPGDelay;
 
 	// now calc some LPG
 	if (cycleTotalLPGDelay) {
