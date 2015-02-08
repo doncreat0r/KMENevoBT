@@ -487,6 +487,8 @@ static inline void ParseLPGResponse() {
 	WORD(PDATA, LPGTgas) = (KMEBuff[49]<<8) + KMEBuff[50];
 	WORD(PDATA, LPGVbat) = (KMEBuff[53]<<8) + KMEBuff[54];
 	DATA[LPGStatus] = KMEBuff[58];
+	corrPres = KMEBuff[106];
+	corrTemp = KMEBuff[107];
 	sei();
 	// start calculating fuel consumption if RPM becomes nonzero
 	// save calculated to EEPROM if RPM becomes zero (engine stopped)
