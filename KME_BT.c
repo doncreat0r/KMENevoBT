@@ -69,14 +69,16 @@ volatile u08 PChead = 0, PCtail = 0;
 volatile u08 PCidx = 0;
 volatile u08 PCcs = 0;
 volatile u08 PCgr = 0;
-volatile u08 PCread = 0; 			// if >0 - readmode, send buffer to PC after each CalcFuel, if >90, set PCread = 0;
 volatile u08 PCtimeout = 0;
 volatile u08 PCCmdTimeout = 0;
+// response queue
+volatile u08 PCreq = 0;				// bitmask of responses pending
+volatile u08 PCread = 0;			// when PC read mode = TRUE we constantly send responses to PC
 
 //
-volatile u08 startCalc = 0L; 		// start calc after RPM > 0
-volatile u16 EEPROMUpdates = 0L;	// number of EEPROM updates
+volatile u08 startCalc = 0; 		// start calc after RPM > 0
 volatile u08 tempMode = 0;			// tempMode: 0 - skiprom/begin measure, 1 - wait for measure end, 2 - read temp value
+volatile u08 parkMode = 0;			// parkMode: 0 - park assist not active, 1 - park assist active
 
 // park assist decoder
 volatile u08 PAstep = 0; // steps are: sync, pause, 1st byte, 2nd byte, pause, 3rd byte, 4th byte, last bit, finish
@@ -122,7 +124,7 @@ ISR(PCINT3_vect) {
 	tmr = TCNT1;
 	TCNT1 = 0;		// always rearm the timer
 	prk = PIND & BV(PARK);
-	if (prk)  DATA[workMode] = modeParkAssist;
+	if (prk)  parkMode = 1;
 	switch (PAstep) {
 		case 0: // no sync, got 1st positive front
 			if (prk) {
@@ -205,9 +207,11 @@ ISR(USART1_RX_vect)
 	unsigned char RS;
 
 	RS = UDR1;
-	if (PTmode >= modeTransparent)  UDR0 = RS;   // pass bytes to PC directly while in transparent/passthrough mode
+	if (PTmode >= modeTransparent && !(PTmode & modeWait))  UDR0 = RS;   // pass bytes to PC directly while in transparent/passthrough mode
 	if (PTmode < modePassthrough) {
-		KMEBuff[KMEidx++] = RS;  // ... but try to process the response as well
+		// if we're in modeSearch and receiving the response - store the response to "search" cmd into the buffer
+		if ((PTmode & modeMask) == modeSearch && KMEidx < 20)  KMEcmds[0][KMEidx + 16] = RS;
+		KMEBuff[KMEidx++] = RS;  // ... try to process the response as well
 		// we have a response with a valid checksum and num of bytes received
 		if ((!KMEgr) && (KMEBuff[0] == bRespKME) && (KMEidx > 1) && (KMEidx >= KMEBuff[1]) && (RS == KMEcs)) {
 			KMEidx = 0;  KMEcs = 0;  KMEgr = 1;  // "got response" signal processed in main cycle
@@ -278,7 +282,7 @@ ISR(USART0_RX_vect)
 	// if not transparent mode and got 1st byte and its the request start - go to transparent mode (temporarly)
 	if ((PTmode < modeTransparent) && (PCidx == 1)) {
 		switch (RS) {
-	  		case bReqKME: PTmode = modeTransparent; PCread = 0; break;
+	  		case bReqKME: PTmode = modeTransparent | modeWait; PCread = 0; break;
 	  		case  bReqPC: PTmode = modePassthrough; PCread = 0; break;
 			case bReqBuf: PCgr = pcRcvCmd; break;
 			default: PCidx = 0; break; // just ignore the garbage as a 1st symbol
@@ -297,8 +301,8 @@ ISR(USART0_RX_vect)
 	}
 	// if receiving data from KME Nevo software
 	if (PTmode >= modeTransparent) {
-		UDR1 = RS;
-		if (PTmode == modeTransparent) {
+		if (!(PTmode & modeWait)) UDR1 = RS;  // just feed the byte strait to ECU
+		if (PTmode & modeTransparent) {
 			// if we got enough bytes according to the request data
 			if ((PCidx > 1) && (PCidx >= PCBuff[1])) {
 				// if we have valid checksum - set signal "got request", else reset PTmode
@@ -324,9 +328,6 @@ ISR(USART0_RX_vect)
 /////////////////////////////////////////////////////////
 void InitParams(void) {
 
-	DATA[0] = 0x42;
-	DATA[1] = 0x00;
-
 	UBRR1L = LO(brd9600);
 	UBRR1H = HI(brd9600);
 	UCSR1A = 0;
@@ -341,8 +342,25 @@ void InitParams(void) {
 	UCSR0C = 1<<UCSZ01|1<<UCSZ00|0<<USBS1; 
 
 	DATAtimer = 100*28;
-	DATA[LPGinjFlow] = 175;  
-	DATA[PETinjFlow] = 177; // doubled in the formula
+	DR.LPGinjFlow = 175;  
+	DR.PETinjFlow = 177; // doubled in the formula
+
+	DF.id = 0x42;
+	DF.length = sizeof(DF);
+	DF.type = BV(RESP_FAST_BIT);
+
+	DS.id = 0x42;
+	DS.length = sizeof(DS);
+	DS.type = BV(RESP_SLOW_BIT);
+
+	DR.id = 0x42;
+	DR.length = sizeof(DR);
+	DR.type = BV(RESP_RARE_BIT);
+
+	DP.id = 0x42;
+	DP.length = sizeof(DP);
+	DP.type = BV(RESP_PARK_BIT);
+
 }
 
 /////////////////////////////////////////////////////////
@@ -351,27 +369,24 @@ void ReadParamsEEPROM(void) {
 	u32 tmp32;
 
 	tmp = eeprom_read_byte((u08*)0);
-	if (tmp < 0xFF)  DATA[LPGinjFlow] = tmp;
+	if (tmp < 0xFF)  DR.LPGinjFlow = tmp;
 	tmp = eeprom_read_byte((u08*)1);
-	if (tmp < 0xFF)  DATA[PETinjFlow] = tmp;
-	EEPROMUpdates = eeprom_read_word((uint16_t*)10);
-
+	if (tmp < 0xFF)  DR.PETinjFlow = tmp;
+	DR.eepromUpdateCount = eeprom_read_word((uint16_t*)10);
 	tmp32 = eeprom_read_dword((uint32_t*)2);
-	if (tmp32 < 0xFFFFFFFF)  DWORD(PDATA, totalLPGInTank) = tmp32;
+	if (tmp32 < 0xFFFFFFFF)  DS.totalLPGInTank = tmp32;
 	tmp32 = eeprom_read_dword((uint32_t*)6);
-	if (tmp32 < 0xFFFFFFFF)  DWORD(PDATA, totalPETInTank) = tmp32;
-
-	WORD(PDATA, eepromUpdateCount) = EEPROMUpdates;
+	if (tmp32 < 0xFFFFFFFF)  DS.totalPETInTank = tmp32;
 }
 
 /////////////////////////////////////////////////////////
 void WriteParamsEEPROM(void) {
 	eeprom_busy_wait();
 
-	eeprom_update_dword((uint32_t*)2, (uint32_t)DWORD(PDATA, totalLPGInTank));
-	eeprom_update_dword((uint32_t*)6, (uint32_t)DWORD(PDATA, totalPETInTank));
-	EEPROMUpdates++; eeprom_update_word((uint16_t*)10, EEPROMUpdates);
-	WORD(PDATA, eepromUpdateCount) = EEPROMUpdates;
+	eeprom_update_dword((uint32_t*)2, (uint32_t)DS.totalLPGInTank);
+	eeprom_update_dword((uint32_t*)6, (uint32_t)DS.totalPETInTank);
+	DR.eepromUpdateCount++; eeprom_update_word((uint16_t*)10, DR.eepromUpdateCount);
+	sbi(PCreq, RESP_RARE_BIT);
 }
 
 /////////////////////////////////////////////////////////
@@ -382,13 +397,13 @@ ISR(SIG_OVERFLOW0) {
 	PCtimeout++;
 
 	// if we have timeout reached
-	if (PCtimeout > 25) {
+	if (PCtimeout > 30) {
 		PCtimeout = 0;
 		PCidx = 0;  PCcs = 0;
 		cbi(TIMSK0, TOIE0);	 // disable overflow
 		// now next cmd
 		if (PTmode & modeWait) {
-			PTmode = PTmode & modeMask;
+			PTmode = PTmode & modeMask;  // if we're in transparent&wait - we'll go to modeSearch with this code
 		} else {
 			if (PTmode == modeTransparent)  PTmode = modeSearch;  // if timeout in transparent - means no frames, so switch to search mode
 		}
@@ -414,7 +429,7 @@ ISR(SIG_OVERFLOW2) {
 			PTmode = modeSearch;
 			if (startCalc) {
 				startCalc = 0;
-				WORD(PDATA, LPGRPM) = 0;
+				DF.LPGRPM = 0;
 				WriteParamsEEPROM();
 			}
 		}
@@ -461,38 +476,38 @@ static inline void ParseLPGResponse() {
 	inj2 = (KMEBuff[5]<<8) + KMEBuff[6]; 
 	inj3 = (KMEBuff[7]<<8) + KMEBuff[8]; 
 	inj4 = (KMEBuff[9]<<8) + KMEBuff[10]; 
-	WORD(PDATA, PETsuminjtime) = inj1 + inj2 + inj3 + inj4;
+	DF.PETsuminjtime = inj1 + inj2 + inj3 + inj4;
 	// if injector max time much longer than others OR min time shorter than others - set alarm bit
-	if ( WORD(PDATA, PETsuminjtime) && 
-		(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) > MaxInjDeviation || 
-		 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, PETsuminjtime)/40) < MinInjDeviation) ) 
-		sbi(DATA[LPGerrBits], 0);
+	if ( DF.PETsuminjtime && 
+		(GetInjMax(inj1, inj2, inj3, inj4) / (DF.PETsuminjtime/40) > MaxInjDeviation || 
+		 GetInjMin(inj1, inj2, inj3, inj4) / (DF.PETsuminjtime/40) < MinInjDeviation) ) 
+		sbi(DF.LPGerrBits, 0);
 	else
-		cbi(DATA[LPGerrBits], 0);
+		cbi(DF.LPGerrBits, 0);
 	inj1 = (KMEBuff[19]<<8) + KMEBuff[20]; 
 	inj2 = (KMEBuff[21]<<8) + KMEBuff[22]; 
 	inj3 = (KMEBuff[23]<<8) + KMEBuff[24]; 
 	inj4 = (KMEBuff[25]<<8) + KMEBuff[26]; 
-	WORD(PDATA, LPGsuminjtime) = inj1 + inj2 + inj3 + inj4;
-	if ( WORD(PDATA, LPGsuminjtime) && 
-		(GetInjMax(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) > MaxInjDeviation || 
-		 GetInjMin(inj1, inj2, inj3, inj4) / (WORD(PDATA, LPGsuminjtime)/40) < MinInjDeviation) ) 
-		sbi(DATA[LPGerrBits], 1);
+	DF.LPGsuminjtime = inj1 + inj2 + inj3 + inj4;
+	if ( DF.LPGsuminjtime && 
+		(GetInjMax(inj1, inj2, inj3, inj4) / (DF.LPGsuminjtime/40) > MaxInjDeviation || 
+		 GetInjMin(inj1, inj2, inj3, inj4) / (DF.LPGsuminjtime/40) < MinInjDeviation) ) 
+		sbi(DF.LPGerrBits, 1);
 	else
-		cbi(DATA[LPGerrBits], 1);
-	WORD(PDATA, LPGRPM) = (KMEBuff[35]<<8) + KMEBuff[36];
-	WORD(PDATA, LPGPcol) = (KMEBuff[41]<<8) + KMEBuff[42];
-	WORD(PDATA, LPGPsys) = (KMEBuff[43]<<8) + KMEBuff[44];
-	WORD(PDATA, LPGTred) = (KMEBuff[47]<<8) + KMEBuff[48];
-	WORD(PDATA, LPGTgas) = (KMEBuff[49]<<8) + KMEBuff[50];
-	WORD(PDATA, LPGVbat) = (KMEBuff[53]<<8) + KMEBuff[54];
-	DATA[LPGStatus] = KMEBuff[58];
+		cbi(DF.LPGerrBits, 1);
+	DF.LPGRPM = (KMEBuff[35]<<8) + KMEBuff[36];
+	DF.LPGPcol = (KMEBuff[41]<<8) + KMEBuff[42];
+	DF.LPGPsys = (KMEBuff[43]<<8) + KMEBuff[44];
+	DS.LPGTred = (KMEBuff[47]<<8) + KMEBuff[48];
+	DS.LPGTgas = (KMEBuff[49]<<8) + KMEBuff[50];
+	DF.LPGVbat = (KMEBuff[53]<<8) + KMEBuff[54];
+	DF.LPGStatus = KMEBuff[58];
 	corrPres = KMEBuff[106];
 	corrTemp = KMEBuff[107];
 	sei();
 	// start calculating fuel consumption if RPM becomes nonzero
 	// save calculated to EEPROM if RPM becomes zero (engine stopped)
-	if (WORD(PDATA, LPGRPM)) {
+	if (DF.LPGRPM) {
 		startCalc = 1;
 	} else {
 		if (startCalc) { WriteParamsEEPROM(); }
@@ -507,27 +522,70 @@ static inline void ParseOBDResponse() {
 
 	cli();   // disable int for critical params
 	KMEtimeOBD = 0;
-	WORD(PDATA, OBDRPM) = (KMEBuff[31]<<8) + KMEBuff[32];
-	DATA[OBDSpeed] = KMEBuff[33];
+	DF.OBDRPM = (KMEBuff[31]<<8) + KMEBuff[32];
+	DF.OBDSpeed = KMEBuff[33];
 	sei();
-	DATA[OBDLoad]  = KMEBuff[34];
-	DATA[OBDECT]   = KMEBuff[35];
-	DATA[OBDMAP]   = KMEBuff[36];
-	DATA[OBDTA]    = KMEBuff[37];
-	DATA[OBDIAT]   = KMEBuff[38];
-	DATA[OBDSTFT]  = KMEBuff[27];
-	DATA[OBDLTFT]  = KMEBuff[28];
-	DATA[OBDerror] = KMEBuff[26];
-	DATA[OBDTPS]   = KMEBuff[41];
+	DF.OBDLoad  = KMEBuff[34];
+	DS.OBDECT   = KMEBuff[35];
+	DF.OBDMAP   = KMEBuff[36];
+	DF.OBDTA    = KMEBuff[37];
+	DS.OBDIAT   = KMEBuff[38];
+	DF.OBDSTFT  = KMEBuff[27];
+	DF.OBDLTFT  = KMEBuff[28];
+	DF.OBDerror = KMEBuff[26];
+	DF.OBDTPS   = KMEBuff[41];
 	sbi(PINC, PLED);
+}
+
+/////////////////////////////////////////////////////////
+void ReadTemperature() {
+	u08 temp[9];
+	u08 i;
+
+	if (DATAtimer > 100*30){
+		// time to read temperature
+		switch (tempMode) {
+    		case 0: 	ow_reset();
+						write_byte(THERM_CMD_SKIPROM);
+						write_byte(THERM_CMD_CONVERTTEMP);
+						tempMode = 1;
+						break;
+		}
+	}
+	if (DATAtimer > 100*32){
+		ow_reset();
+		write_byte(THERM_CMD_SKIPROM);
+		write_byte(THERM_CMD_RSCRATCHPAD);
+		for (i=0;i<9;i++)  temp[i] = read_byte();
+		// if CRC matches - convert T and put it into buffer
+		if (temp[8] == calc_crc(&temp[0], 8)) {
+			DS.outsideTemp = (temp[0]<<8) + temp[1];
+		} 
+		DATAtimer = 0;
+		tempMode = 0;
+	}
+}
+
+/////////////////////////////////////////////////////////
+void ReadParkAssist() {
+	cli();
+	PAchanged = 0;
+	if (PAdata_old[0] != PAdata[0] || PAdata_old[1] != PAdata[1]) {
+		PAdata_old[0] = PAdata[0];  
+		PAdata_old[1] = PAdata[1];
+		DP.P1 = PAdata_old[0];
+		DP.P2 = PAdata_old[1];
+		sbi(PCreq, RESP_PARK_BIT); // send PA buffer
+	}
+	sei();
 }
 
 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
 int main (void) {
 
-	u08 i, cmd, tempEnabled;
-	u08 temp[9];
+	u08 i, tmp, tempEnabled;
+	u08 fastCnt = 0;
 
 	wdt_disable();
 	InitParams();
@@ -563,70 +621,35 @@ int main (void) {
 	tempEnabled = ow_reset();
 
 	while (1) {
-		if (tempEnabled) {
-			if (DATAtimer > 100*30){
-				// time to read temperature
-				//PCICR = (0<<PCIE0);
-				switch (tempMode) {
-		    		case 0: 	ow_reset();
-								write_byte(THERM_CMD_SKIPROM);
-    							write_byte(THERM_CMD_CONVERTTEMP);
-								tempMode = 1;
-								break;
-				}
-			}
-			if (DATAtimer > 100*32){
-				ow_reset();
-				write_byte(THERM_CMD_SKIPROM);
-    			write_byte(THERM_CMD_RSCRATCHPAD);
-				for (i=0;i<9;i++)  temp[i] = read_byte();
-				// if CRC matches - convert T and put it into buffer
-				if (temp[8] == calc_crc(&temp[0], 8)) {
-					//PCSend(Nibble2Hex((crc>>4)&0xF));
-					//PCSend(Nibble2Hex((crc>>0)&0xF));
-					WORD(PDATA, outsideTemp) = (temp[0]<<8) + temp[1];
-				} 
-				DATAtimer = 0;
-				tempMode = 0;
-			}
-		}  // tempEnabled
+		if (tempEnabled)  ReadTemperature();
 		if (DATAtimer > 100*40){
 			DATAtimer = 0;
 			tempMode = 0;
 		}
 		// park assist data
-		if (PAchanged) {
-			cli();
-			PAchanged = 0;
-			if (PAdata_old[0] != PAdata[0] || PAdata_old[1] != PAdata[1]) {
-				PAdata_old[0] = PAdata[0]; PAdata_old[1] = PAdata[1];
-				WORD(PDATA, PAdata1) = PAdata_old[0];
-				WORD(PDATA, PAdata2) = PAdata_old[1];
-				if (PCread)  PCread = 1; // send buffer
-			}
-			sei();
-		}
-		if (DATA[workMode] == modeParkAssist && TCNT1 > 10000) {
-			DATA[workMode] = PTmode;
-			WORD(PDATA, PAdata1) = 0;
-			WORD(PDATA, PAdata2) = 0;
+		if (PAchanged)  ReadParkAssist();
+		if (parkMode && TCNT1 > 10000) {
+			parkMode = 0;  DP.P1 = 0;  DP.P2 = 0;
 		}
 		// incoming commands
 		if (PCgr == pcCmdOK) {
-			cli();  cmd = PCBuff[1];  PCgr = pcNone;  sei();
-			switch (cmd) {
-				case pcCmdRead: PCread = 1; break; //for (i=0; i<90; i++)  PCSend(DATA[i]); break;
-				case pcCmdAddLPG: 		cli(); DWORD(PDATA, totalLPGInTank) += DWORD(PPCBuff, 2); sei(); 
+			cli();  tmp = PCBuff[1];  PCgr = pcNone;  sei();
+			switch (tmp) {
+				case pcCmdRead: 		PCread = 1; 
+										sbi(PCreq, RESP_RARE_BIT); break; 
+				case pcCmdAddLPG: 		cli(); DS.totalLPGInTank += DWORD(PPCBuff, 2); sei(); 
 										WriteParamsEEPROM(); break;
-				case pcCmdAddPET: 		cli(); DWORD(PDATA, totalPETInTank) += DWORD(PPCBuff, 2); sei(); 
+				case pcCmdAddPET: 		cli(); DS.totalPETInTank += DWORD(PPCBuff, 2); sei(); 
 										WriteParamsEEPROM(); break;
 				case pcCmdResetTrip: 	cli();
-										DWORD(PDATA, tripLPGSpent) = 0; DWORD(PDATA, tripLPGTime) = 0; DWORD(PDATA, tripLPGDist) = 0; 
-										DWORD(PDATA, tripPETSpent) = 0; DWORD(PDATA, tripPETTime) = 0; DWORD(PDATA, tripPETDist) = 0;
+										DS.tripLPGSpent = 0; DS.tripLPGTime = 0; DS.tripLPGDist = 0; 
+										DS.tripPETSpent = 0; DS.tripPETTime = 0; DS.tripPETDist = 0;
 										sei();
 										break;
-				case pcCmdSetLPGInjFlow: DATA[LPGinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)0, DATA[LPGinjFlow]); break;
-				case pcCmdSetPETInjFLow: DATA[PETinjFlow] = PCBuff[2]; eeprom_busy_wait(); eeprom_update_byte((u08*)1, DATA[PETinjFlow]); break;
+				case pcCmdSetLPGInjFlow: DR.LPGinjFlow = PCBuff[2]; eeprom_busy_wait(); 
+										eeprom_update_byte((u08*)0, DR.LPGinjFlow); sbi(PCreq, RESP_RARE_BIT); break;
+				case pcCmdSetPETInjFLow: DR.PETinjFlow = PCBuff[2]; eeprom_busy_wait(); 
+										eeprom_update_byte((u08*)1, DR.PETinjFlow); sbi(PCreq, RESP_RARE_BIT); break;
 				case pcCmdReboot: 		PCSend('$');
 										sbi(UCSR0B, UDRIE0);  				// explicitly enable UDRIE0 before reset
 										wdt_enable(1); cli(); while(1); break;
@@ -639,9 +662,10 @@ int main (void) {
 			switch (KMEBuff[2]) {
 				case bRespLPG:  // got 0x06 (LPG info) 
 					ParseLPGResponse();
-					if (PCread && DATA[workMode] < modeParkAssist) {
-						PCread = 1; // send buffer
-						DATA[workMode] = PTmode;
+					sbi(PCreq, RESP_FAST_BIT);
+					if (++fastCnt > 2) {
+						sbi(PCreq, RESP_SLOW_BIT);
+						fastCnt = 0;
 					}
 					break;
 				case bRespOBD:  // got 0xB1 (OBD info) 
@@ -676,15 +700,47 @@ int main (void) {
 			PTmode = PTmode | modeWait;
 			sbi(UCSR1B, UDRIE1);
 		}
-		// handling PC DATA buffer sending
-		if (PCread && PCread <= 90) {
-			PCSend(DATA[PCread - 1]);
-			PCread++;
-		}
-		if (PChead != PCtail)
-		{
-			sbi(UCSR0B, UDRIE0);  // enable UDR Empty Interrupt
-		}
+		// handling PC response buffer sending
+		// TODO: some kind of a function here...
+		if (PCread) {
+			if (PCreq & BV(RESP_PARK_BIT)) {
+				DP.checkSum = 0;
+				for (i = 0; i < DP.length; i++) {
+					tmp = *(volatile u08*)((void *)&DP + i);
+					PCSend(tmp);
+					DP.checkSum += tmp;
+				}
+				cbi(PCreq, RESP_PARK_BIT);
+			} else
+			if (PCreq & BV(RESP_RARE_BIT)) {
+				DR.checkSum = 0;
+				for (i = 0; i < DR.length; i++) {
+					tmp = *(volatile u08*)((void *)&DR + i);
+					PCSend(tmp);
+					DR.checkSum += tmp;
+				}
+				cbi(PCreq, RESP_RARE_BIT);
+			} else
+			if (PCreq & BV(RESP_SLOW_BIT)) {
+				DS.checkSum = 0;
+				for (i = 0; i < DS.length; i++) {
+					tmp = *(volatile u08*)((void *)&DS + i);
+					PCSend(tmp);
+					DS.checkSum += tmp;
+				}
+				cbi(PCreq, RESP_SLOW_BIT);
+			} else
+			if (PCreq & BV(RESP_FAST_BIT)) {
+				DF.checkSum = 0;
+				for (i = 0; i < DF.length; i++) {
+					tmp = *(volatile u08*)((void *)&DF + i);
+					PCSend(tmp);
+					DF.checkSum += tmp;  // so we'll send the last byte as checksum before adding it to itself
+				}
+				cbi(PCreq, RESP_FAST_BIT);
+			}
+		} // PCread
+		if (PChead != PCtail)  sbi(UCSR0B, UDRIE0);  // enable UDR Empty Interrupt
 	}
 	return 0;
 }

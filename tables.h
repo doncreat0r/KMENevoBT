@@ -7,6 +7,7 @@
 #define HI(x) ((x)>>8)
 #define LO(x) ((x)& 0xFF)
 
+#define BYTE(arr, addr) (*(volatile u08*)((addr)+arr))
 #define WORD(arr, addr) (*(volatile u16*)((addr)+arr))
 #define DWORD(arr, addr) (*(volatile u32*)((addr)+arr))
 
@@ -20,67 +21,101 @@
 #define bReqPC 0x42
 #define bReqBuf 0x62
 
-#define workMode 1
+// new separate responses
+#define RESP_FAST_BIT 0		// fast updating response (inj time, pressures, RPM, part assist, etc.)
+#define RESP_SLOW_BIT 1		// slow responses (temperature, fuel tank level, avg fuel consumption, outside temp, etc.)
+#define RESP_RARE_BIT 2		// rare updating response (EEPROM cnt, inj flow)
+#define RESP_PARK_BIT 3		// park assist response
 
-// offsets in buffer for 16 bits
-#define PETsuminjtime 2
-#define LPGsuminjtime 4
-#define LPGRPM 6
-#define LPGPcol 8
-#define LPGPsys 10
-#define LPGTred 12
-#define LPGTgas 14
-#define LPGVbat 16
-#define OBDRPM 18
+// fast updating structure (twice a sec or so)
+struct strucResponseFast {
+	u08 id;					// id = 0x42
+	u08 length;				// data length
+	u08 type;				// response type (RESP_XXX)
+	u08 workMode;
+	//
+	u16 PETsuminjtime;
+	u16 LPGsuminjtime;
+	u16 LPGRPM;
+	u16 LPGPcol;
+	u16 LPGPsys;
+	u16 LPGVbat;
+	u16 OBDRPM;
+	u08 LPGStatus;
+	u08 OBDSpeed;
+	u08 OBDMAP;
+	u08 OBDTA;
+	u08 OBDSTFT;
+	u08 OBDLTFT;
+	u08 OBDerror;
+	u08 OBDTPS;
+	u08 OBDLoad;
+	// error bits:
+	// 0 - some LPG injector time much longer or shorter than others
+	// 1 - some PET injector time much longer or shorter than others
+	u08 LPGerrBits;
+	// fast updating fuel consumptions
+	u16 cycleAvgLPGPerHour;
+	u16 cycleAvgPETPerHour;
+	//
+	u08 checkSum;
+}__attribute__((__packed__ )) DF;
 
-// offsets in buffer for 8 bits
-#define LPGStatus 20
-#define OBDSpeed 21
-#define OBDLoad 22
-#define OBDECT 23
-#define OBDMAP 24
-#define OBDTA 25
-#define OBDIAT 26
-#define OBDSTFT 27
-#define OBDLTFT 28
-#define OBDerror 29
-#define OBDTPS 30
-// error bits:
-// 0 - some LPG injector time much longer or shorter than others
-// 1 - some PET injector time much longer or shorter than others
-#define LPGerrBits 31
+// slow updating structure (once in 2 sec, sent just before Fast struct)
+struct strucResponseSlow {
+	u08 id;
+	u08 length;
+	u08 type;				// response type (RESP_XXX)
+	u08 workMode;
+	//
+	u16 outsideTemp;
+	u16 LPGTred;
+	u16 LPGTgas;
+	u16 OBDECT;
+	u16 OBDIAT;
+ 	u16 cycleAvgLPGPer100;
+	u16 cycleAvgPETPer100;
+	u16 bufAvgLPGPer100;
+	u16 bufAvgPETPer100;
+	u32 totalLPGInTank;
+	u32 totalPETInTank;
+	// avg consumption per 100 km calculated from Spent and Dist in the client!
+	u32 tripLPGSpent;
+	u32 tripPETSpent;
+	u32 tripLPGDist;
+	u32 tripPETDist;
+	u32 tripLPGTime;
+	u32 tripPETTime;
+	//
+	u08 checkSum;
+}__attribute__((__packed__ )) DS;
 
-// offsets for calculated values
-#define cycleAvgLPGPerHour 32
-#define cycleAvgPETPerHour 34
-#define cycleAvgLPGPer100 36
-#define cycleAvgPETPer100 38
+// rare updating values (sent if needed)
+struct strucResponseRare {
+	u08 id;
+	u08 length;
+	u08 type;				// response type (RESP_XXX)
+	u08 workMode;
+	//
+	u16 eepromUpdateCount;
+	u08 LPGinjFlow;
+	u08 PETinjFlow;
+	//
+	u08 checkSum;
+}__attribute__((__packed__ )) DR;
 
-#define outsideTemp 40
-
-#define bufAvgLPGPer100 42
-#define bufAvgPETPer100 44
-
-// 32bit - tank fill
-#define totalLPGInTank 46
-#define totalPETInTank 50
-
-// debug
-#define PAdata1 54
-#define PAdata2 56
-
-// avg per trip
-// avg consumption per 100 km calculated from Spent and Dist in the client!
-#define tripLPGSpent 58
-#define tripPETSpent 62
-#define tripLPGDist 66
-#define tripPETDist 70
-#define tripLPGTime 74
-#define tripPETTime 80
-
-#define eepromUpdateCount 84
-#define LPGinjFlow 86
-#define PETinjFlow 87
+// park assist values (sent if PA is active)
+struct strucResponsePark {
+	u08 id;
+	u08 length;
+	u08 type;				// response type (RESP_XXX)
+	u08 workMode;
+	//
+	u16 P1;
+	u16 P2;
+	//
+	u08 checkSum;
+}__attribute__((__packed__ )) DP;
 
 // KME Nevo requests
 // response to 1st request (get hw conf) kept in the request buffer (offset+16)
@@ -110,9 +145,6 @@ static volatile u08 KMEcmds[5][40] = {
 // LPG corrections affecting injection time/liquid phase consumption relation, signed %
 volatile s08 corrPres, corrTemp; 
 
-// LPG/OBD data buffers
-volatile u08 DATA[200];
-volatile u16 PDATA = (u16)&DATA[0];
 volatile u16 DATAtimer = 0;
 
 // 1st buffer - ~8s depth
@@ -167,34 +199,33 @@ static inline void CalcFuel(u16 cDelay) {
 	cIdx = cIdx & 0x0F;    // ensure we're within buffer boundaries
 	cTail = (cIdx + 1) & 0x0F;  // buffer tail
 	cycleDelay[cIdx] = cDelay;
-	cycleVspeed[cIdx] = DATA[OBDSpeed];
-	cycleStatus[cIdx] = DATA[LPGStatus];
+	cycleVspeed[cIdx] = DF.OBDSpeed;
+	cycleStatus[cIdx] = DF.LPGStatus;
 	// counting totals based on current fuel source - LPG/Petrol
-	// TODO: normalize LPG inj time with (Psys-Pcol) and Tgas, is Psys absolute?
-	cRPMs = (u32)(WORD(PDATA, LPGRPM) / 5 * cDelay);
+	cRPMs = (u32)(DF.LPGRPM / 5 * cDelay);
 	cDist = (cycleVspeed[cIdx] * cDelay * 10 / 36);  // in centimeters!
 	if (cycleStatus[cIdx] == 5) {
-		cInjT = (u32)WORD(PDATA, LPGsuminjtime) * cRPMs * (100 - corrPres) / 100 * (100 - corrTemp) / 100;  
-		cSpent = (u32)(cInjT / 2692800L * DATA[LPGinjFlow]);
+		cInjT = (u32)(DF.LPGsuminjtime) * cRPMs / 100 * (100 - corrPres) / 100 * (100 - corrTemp);
+		cSpent = (u32)(cInjT / 2692800L * DR.LPGinjFlow);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );  // /10 would be milliseconds
-		DWORD(PDATA, totalLPGInTank) -= cSpent;
-		DWORD(PDATA, tripLPGSpent) += cSpent;
+		DS.totalLPGInTank -= cSpent;
+		DS.tripLPGSpent += cSpent;
 		cycleTotalLPG += cycleInjTime[cIdx];
 		cycleTotalLPGDelay += cDelay;
-		DWORD(PDATA, tripLPGTime) += cDelay;
+		DS.tripLPGTime += cDelay;
 		cycleTotalLPGDist += cDist;  // in centimeters!!
-		DWORD(PDATA, tripLPGDist) += cDist; 
+		DS.tripLPGDist += cDist; 
 	} else if (cycleStatus[cIdx] > 2 && cRPMs > 0) {  // if RPM > 0 and status = 3 - driving on petrol, status = 4 - warming on petrol
-		cInjT = (u32)WORD(PDATA, PETsuminjtime) * cRPMs * 2; // doubling to fit pet injflow to 1 byte
-		cSpent = (u32)(cInjT / 2692800L * DATA[PETinjFlow]);
+		cInjT = (u32)(DF.PETsuminjtime) * cRPMs * 2; // doubling to fit pet injflow to 1 byte
+		cSpent = (u32)(cInjT / 2692800L * DR.PETinjFlow);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );
-		DWORD(PDATA, totalPETInTank) -= cSpent;
-		DWORD(PDATA, tripPETSpent) += cSpent;
+		DS.totalPETInTank -= cSpent;
+		DS.tripPETSpent += cSpent;
 		cycleTotalPET += cycleInjTime[cIdx];
 		cycleTotalPETDelay += cDelay;
-		DWORD(PDATA, tripPETTime) += cDelay;
+		DS.tripPETTime += cDelay;
 		cycleTotalPETDist += cDist;  // in centimeters
-		DWORD(PDATA, tripPETDist) += cDist; 
+		DS.tripPETDist += cDist; 
 	}
 	// remove the tail values from counters
 	if (cycleStatus[cTail] == 5){
@@ -207,23 +238,20 @@ static inline void CalcFuel(u16 cDelay) {
 		cycleTotalPETDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
 	}
 
-	//WORD(PDATA, db1) = cycleTotalLPG;
-	//WORD(PDATA, db2) = cycleTotalLPGDelay;
-
 	// now calc some LPG
 	if (cycleTotalLPGDelay) {
-		WORD(PDATA, cycleAvgLPGPerHour) = (u16)( (u32)(cycleTotalLPG) * (u32)(DATA[LPGinjFlow] * 6) / (u32)cycleTotalLPGDelay);
-	} else  WORD(PDATA, cycleAvgLPGPerHour) = 0L;
+		DF.cycleAvgLPGPerHour = (u16)( (u32)(cycleTotalLPG) * (u32)(DR.LPGinjFlow * 6) / (u32)cycleTotalLPGDelay);
+	} else  DF.cycleAvgLPGPerHour = 0L;
 	if (cycleTotalLPGDist) {
-		WORD(PDATA, cycleAvgLPGPer100) = (u16)( (u32)cycleTotalLPG * 10 * (u32)DATA[LPGinjFlow] / (u32)(cycleTotalLPGDist / 100 ) / 6 );  // changed to centimeters
-	} else  WORD(PDATA, cycleAvgLPGPer100) = 0L;
+		DS.cycleAvgLPGPer100 = (u16)( (u32)cycleTotalLPG * 10 * (u32)(DR.LPGinjFlow) / (u32)(cycleTotalLPGDist / 100 ) / 6 );  // changed to centimeters
+	} else  DS.cycleAvgLPGPer100 = 0L;
 	// now calc some Petrol
 	if (cycleTotalPETDelay) {
-		WORD(PDATA, cycleAvgPETPerHour) = (u16)( (u32)(cycleTotalPET) * (u32)(DATA[PETinjFlow] * 6) / (u32)cycleTotalPETDelay);
-	} else  WORD(PDATA, cycleAvgPETPerHour) = 0L;
+		DF.cycleAvgPETPerHour = (u16)( (u32)(cycleTotalPET) * (u32)(DR.PETinjFlow * 6) / (u32)cycleTotalPETDelay);
+	} else  DF.cycleAvgPETPerHour = 0L;
 	if (cycleTotalPETDist) {
-		WORD(PDATA, cycleAvgPETPer100) = (u16)( (u32)cycleTotalPET * 10 * (u32)DATA[PETinjFlow] / (u32)(cycleTotalPETDist / 100) / 6 );
-	} else  WORD(PDATA, cycleAvgPETPer100) = 0L;
+		DS.cycleAvgPETPer100 = (u16)( (u32)cycleTotalPET * 10 * (u32)(DR.PETinjFlow) / (u32)(cycleTotalPETDist / 100) / 6 );
+	} else  DS.cycleAvgPETPer100 = 0L;
 
 	// now fill 2nd buffer if 16th step filling 1st is active
 	if (cIdx == 0x0F) {
@@ -251,12 +279,12 @@ static inline void CalcFuel(u16 cDelay) {
 
 		// now calc some LPG
 		if (bufTotalLPGDist) {
-			WORD(PDATA, bufAvgLPGPer100) = (u16)( (u32)bufTotalLPG * 10 * (u32)DATA[LPGinjFlow] / (u32)(bufTotalLPGDist / 100) / 6 );
-		} else  WORD(PDATA, bufAvgLPGPer100) = 0L;
+			DS.bufAvgLPGPer100 = (u16)( (u32)bufTotalLPG * 10 * (u32)(DR.LPGinjFlow) / (u32)(bufTotalLPGDist / 100) / 6 );
+		} else  DS.bufAvgLPGPer100 = 0L;
 		// petrol
 		if (bufTotalPETDist) {
-			WORD(PDATA, bufAvgPETPer100) = (u16)( (u32)bufTotalPET * 10 * (u32)DATA[PETinjFlow] / (u32)(bufTotalPETDist / 100) / 6 );
-		} else  WORD(PDATA, bufAvgPETPer100) = 0L;
+			DS.bufAvgPETPer100 = (u16)( (u32)bufTotalPET * 10 * (u32)(DR.PETinjFlow) / (u32)(bufTotalPETDist / 100) / 6 );
+		} else  DS.bufAvgPETPer100 = 0L;
 
 		bIdx++;
 	}
