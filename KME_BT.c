@@ -85,8 +85,6 @@ volatile u08 PAstep = 0; // steps are: sync, pause, 1st byte, 2nd byte, pause, 3
 volatile u08 PAcnt = 0;
 volatile u08 PAchanged = 0;
 volatile u16 PAdata[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
-volatile u16 PAdata_old[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
-
 
 // ======================================================
 // Send byte to PC
@@ -570,11 +568,9 @@ void ReadTemperature() {
 void ReadParkAssist() {
 	cli();
 	PAchanged = 0;
-	if (PAdata_old[0] != PAdata[0] || PAdata_old[1] != PAdata[1]) {
-		PAdata_old[0] = PAdata[0];  
-		PAdata_old[1] = PAdata[1];
-		DP.P1 = PAdata_old[0];
-		DP.P2 = PAdata_old[1];
+	if (DP.P1 != PAdata[0] || DP.P2 != PAdata[1]) {
+		DP.P1 = PAdata[0];
+		DP.P2 = PAdata[1];
 		sbi(PCreq, RESP_PARK_BIT); // send PA buffer
 	}
 	sei();
