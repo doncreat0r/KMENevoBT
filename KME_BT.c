@@ -20,13 +20,14 @@
 #define T2delay (255 - 108)
 
 // modes
-// 0, 1, 2, 3, 4, ... - current cmd to xmit
-// 8 - modeWait 4th bit
-#define modeSearch 0				// automatic search for KME Nevo ECU 
-#define modeGetOBD 1				// send "GET OBD Config" command
-#define modeSetOBD 2				// set required PIDs for OBD (may be wait until OBD initialization?)
-#define modeReadLPG 3				// transmit 'read current values' command
-#define modeReadOBD 4				// transmit 'read OBD' command
+// 1, 2, 3, 4, ... - current cmd to xmit
+// and modeWait Nth bit
+#define modeZero 0
+#define modeSearch 1				// automatic search for KME Nevo ECU 
+#define modeGetOBD 2				// send "GET OBD Config" command
+#define modeSetOBD 3				// set required PIDs for OBD (may be wait until OBD initialization?)
+#define modeReadLPG 4				// transmit 'read current values' command
+#define modeReadOBD 5				// transmit 'read OBD' command
 #define modeWait 8					// wait for response or timeout, than switch to modeSearching or modeReadXXX based on response buffer 
 #define modeTransparent 32			// transparent passsthrough mode
 #define modePassthrough 48			// passthrough mode until reboot (explicitly selectable, for tuning the Bluetooth module, etc.)
@@ -208,7 +209,7 @@ ISR(USART1_RX_vect)
 	if (PTmode >= modeTransparent && !(PTmode & modeWait))  UDR0 = RS;   // pass bytes to PC directly while in transparent/passthrough mode
 	if (PTmode < modePassthrough) {
 		// if we're in modeSearch and receiving the response - store the response to "search" cmd into the buffer
-		if ((PTmode & modeMask) == modeSearch && KMEidx < 20)  KMEcmds[0][KMEidx + 16] = RS;
+		if ((PTmode & modeMask) == modeSearch && KMEidx < 20)  KMEcmds[modeSearch][KMEidx + 16] = RS;
 		KMEBuff[KMEidx++] = RS;  // ... try to process the response as well
 		// we have a response with a valid checksum and num of bytes received
 		if ((!KMEgr) && (KMEBuff[0] == bRespKME) && (KMEidx > 1) && (KMEidx >= KMEBuff[1]) && (RS == KMEcs)) {
@@ -234,7 +235,7 @@ ISR(USART1_UDRE_vect)
 {
 	u08 cmd;
 
-	cmd = PTmode & modeMask;
+	cmd = (PTmode & modeMask);
 	// if not in transparent mode - send cmd 
 	if ((PTmode < modeTransparent) && (KMEsnd < KMEcmds[cmd][1])) {
 		if (!KMEsnd) StartT0();
@@ -273,7 +274,7 @@ ISR(USART0_TX_vect)
 // Received byte from PC interrupt handler
 ISR(USART0_RX_vect)
 {
-	unsigned char RS;
+	u08 RS, i;
 
 	RS = UDR0;
 	PCBuff[PCidx++] = RS; 
@@ -299,7 +300,7 @@ ISR(USART0_RX_vect)
 	}
 	// if receiving data from KME Nevo software
 	if (PTmode >= modeTransparent) {
-		if (!(PTmode & modeWait)) UDR1 = RS;  // just feed the byte strait to ECU
+		if (!(PTmode & modeWait))  UDR1 = RS;  // just feed the byte strait to ECU
 		if (PTmode & modeTransparent) {
 			// if we got enough bytes according to the request data
 			if ((PCidx > 1) && (PCidx >= PCBuff[1])) {
@@ -307,6 +308,11 @@ ISR(USART0_RX_vect)
 				if (RS == PCcs) {
 					StartT0();             // start T0 timer, so if no requests from KME software in 1s - revert to own requests
 					KMEidx = 0; KMEcs = 0; // also reset response buffer indexes
+					// if we've received 0x01 cmd - just send the response and switch to pure modeTransparent
+					if (PCBuff[2] == 0x01 && (PTmode & modeWait)) {
+						PTmode = modeTransparent;
+						for (i = 16; i < 34; i++ )  PCSend(KMEcmds[modeSearch][i]);
+					}
 				}
 				PCcs = 0;  PCidx = 0;   // reinit index and checksum 
 			} else {
@@ -319,8 +325,6 @@ ISR(USART0_RX_vect)
 		PCidx = 0;
 		PCcs = 0;
 	}
-
-
 }
 
 /////////////////////////////////////////////////////////
@@ -391,17 +395,16 @@ void WriteParamsEEPROM(void) {
 ISR(SIG_OVERFLOW0) {
 
 	TCNT0 = T0delay;  // reload timer overflow
-
 	PCtimeout++;
 
 	// if we have timeout reached
-	if (PCtimeout > 30) {
+	if (PCtimeout > 200) {  // 1s timeout
 		PCtimeout = 0;
 		PCidx = 0;  PCcs = 0;
 		cbi(TIMSK0, TOIE0);	 // disable overflow
 		// now next cmd
 		if (PTmode & modeWait) {
-			PTmode = PTmode & modeMask;  // if we're in transparent&wait - we'll go to modeSearch with this code
+			PTmode = PTmode & modeMask;  // if we're in transparent&wait - we'll go to modeZero with this code
 		} else {
 			if (PTmode == modeTransparent)  PTmode = modeSearch;  // if timeout in transparent - means no frames, so switch to search mode
 		}
@@ -702,6 +705,7 @@ int main (void) {
 			if (PCreq & BV(RESP_PARK_BIT)) {
 				DP.checkSum = 0;
 				for (i = 0; i < DP.length; i++) {
+					if (!PCread) break;
 					tmp = *(volatile u08*)((void *)&DP + i);
 					PCSend(tmp);
 					DP.checkSum += tmp;
@@ -711,6 +715,7 @@ int main (void) {
 			if (PCreq & BV(RESP_RARE_BIT)) {
 				DR.checkSum = 0;
 				for (i = 0; i < DR.length; i++) {
+					if (!PCread) break;
 					tmp = *(volatile u08*)((void *)&DR + i);
 					PCSend(tmp);
 					DR.checkSum += tmp;
@@ -720,6 +725,7 @@ int main (void) {
 			if (PCreq & BV(RESP_SLOW_BIT)) {
 				DS.checkSum = 0;
 				for (i = 0; i < DS.length; i++) {
+					if (!PCread) break;
 					tmp = *(volatile u08*)((void *)&DS + i);
 					PCSend(tmp);
 					DS.checkSum += tmp;
@@ -728,10 +734,12 @@ int main (void) {
 			} else
 			if (PCreq & BV(RESP_FAST_BIT)) {
 				DF.checkSum = 0;
+				DF.workMode = PTmode;
 				for (i = 0; i < DF.length; i++) {
+					if (!PCread) break;
 					tmp = *(volatile u08*)((void *)&DF + i);
 					PCSend(tmp);
-					DF.checkSum += tmp;  // so we'll send the last byte as checksum before adding it to itself
+					DF.checkSum += tmp;  // so the idea is to send the last byte as checksum BEFORE adding it to itself
 				}
 				cbi(PCreq, RESP_FAST_BIT);
 			}
