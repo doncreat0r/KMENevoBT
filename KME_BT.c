@@ -91,13 +91,19 @@ volatile u16 PAdata[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
 // Send byte to PC
 void PCSend(u08 data)
 {
-	u08 _sreg;
-
-	_sreg = SREG; cli();
+	u08 _sreg = SREG; 
+	cli();
 	PCsend[PChead] = data;
 	PChead++;
 	if (PChead >= sizeof(PCsend)) PChead = 0;
 	SREG = _sreg;
+}
+
+static inline void PCSendInt(u08 data)	// send called from ISR handler
+{
+	PCsend[PChead] = data;
+	PChead++;
+	if (PChead >= sizeof(PCsend)) PChead = 0;
 }
 
 static inline void StartT0(void) {
@@ -311,7 +317,7 @@ ISR(USART0_RX_vect)
 					// if we've received 0x01 cmd - just send the response and switch to pure modeTransparent
 					if (PCBuff[2] == 0x01 && (PTmode & modeWait)) {
 						PTmode = modeTransparent;
-						for (i = 16; i < 34; i++ )  PCSend(KMEcmds[modeSearch][i]);
+						for (i = 16; i < 34; i++ )  PCSendInt(KMEcmds[modeSearch][i]);
 					}
 				}
 				PCcs = 0;  PCidx = 0;   // reinit index and checksum 
