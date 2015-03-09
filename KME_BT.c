@@ -28,6 +28,7 @@
 #define modeSetOBD 3				// set required PIDs for OBD (may be wait until OBD initialization?)
 #define modeReadLPG 4				// transmit 'read current values' command
 #define modeReadOBD 5				// transmit 'read OBD' command
+#define modeReadOSA 6				// transmit 'read OSA Bank 1' command
 #define modeWait 8					// wait for response or timeout, than switch to modeSearching or modeReadXXX based on response buffer 
 #define modeTransparent 32			// transparent passsthrough mode
 #define modePassthrough 48			// passthrough mode until reboot (explicitly selectable, for tuning the Bluetooth module, etc.)
@@ -46,6 +47,12 @@
 #define pcCmdSetLPGInjFlow 8
 #define pcCmdSetPETInjFLow 9
 #define pcCmdReboot 0xFF
+
+// what to read from LPG ECU
+#define PCreadLive 1				// read live LPG and OBD data
+#define PCreadOSA 2					// read OSA table as well
+
+// Why all vars are volatile? Because  I need to know memory total consumption w/o any optimizations
 
 // work mode
 volatile u08 PTmode = modeSearch;	// current work mode
@@ -74,7 +81,7 @@ volatile u08 PCtimeout = 0;
 volatile u08 PCCmdTimeout = 0;
 // response queue
 volatile u08 PCreq = 0;				// bitmask of responses pending
-volatile u08 PCread = 0;			// when PC read mode = TRUE we constantly send responses to PC
+volatile u08 PCread = 0;			// when PC read > 0 we're reading data from ECU and constantly send responses to PC
 
 //
 volatile u08 startCalc = 0; 		// start calc after RPM > 0
@@ -350,7 +357,7 @@ void InitParams(void) {
 	UCSR0C = 1<<UCSZ01|1<<UCSZ00|0<<USBS1; 
 
 	DATAtimer = 100*28;
-	DR.LPGinjFlow = 175;  
+	DR.LPGinjFlow = 200;  
 	DR.PETinjFlow = 177; // doubled in the formula
 
 	DF.id = 0x42;
@@ -368,6 +375,10 @@ void InitParams(void) {
 	DP.id = 0x42;
 	DP.length = sizeof(DP);
 	DP.type = BV(RESP_PARK_BIT);
+
+	DO.id = 0x42;
+	DO.length = sizeof(DO);
+	DO.type = BV(RESP_OSA1_BIT);
 
 }
 
@@ -543,6 +554,13 @@ static inline void ParseOBDResponse() {
 	DF.OBDTPS   = KMEBuff[41];
 	sbi(PINC, PLED);
 }
+/////////////////////////////////////////////////////////
+static inline void ParseOSAResponse() {
+// copy the OSA Bank 1 to KMEcmds after the request bytes
+	for (int j = 0; j < 25; j++) {
+		DO.OSA[j] = KMEBuff[j + 3];
+	}
+}
 
 /////////////////////////////////////////////////////////
 void ReadTemperature() {
@@ -640,7 +658,7 @@ int main (void) {
 		if (PCgr == pcCmdOK) {
 			cli();  tmp = PCBuff[1];  PCgr = pcNone;  sei();
 			switch (tmp) {
-				case pcCmdRead: 		PCread = 1; 
+				case pcCmdRead: 		PCread = PCBuff[2];   // 0 - stop sending data to PC, 1 - readLive, 2 - readOSA
 										sbi(PCreq, RESP_RARE_BIT); break; 
 				case pcCmdAddLPG: 		cli(); DS.totalLPGInTank += DWORD(PPCBuff, 2); sei(); 
 										WriteParamsEEPROM(); break;
@@ -668,6 +686,7 @@ int main (void) {
 				case bRespLPG:  // got 0x06 (LPG info) 
 					ParseLPGResponse();
 					sbi(PCreq, RESP_FAST_BIT);
+					// also transmit SLOW data after each two FAST data
 					if (++fastCnt > 2) {
 						sbi(PCreq, RESP_SLOW_BIT);
 						fastCnt = 0;
@@ -675,6 +694,10 @@ int main (void) {
 					break;
 				case bRespOBD:  // got 0xB1 (OBD info) 
 					ParseOBDResponse();
+					break;
+				case bRespOSA:
+					ParseOSAResponse();
+					sbi(PCreq, RESP_OSA1_BIT);
 					break;
 			}
 			// check for valid response to our own request and switch to next request 
@@ -695,7 +718,8 @@ int main (void) {
 							sei();
 						}
 						break;
-					case modeReadOBD: PTmode = modeReadLPG; break;
+					case modeReadOBD: if (PCread == PCreadOSA)  PTmode = modeReadOSA; else PTmode = modeReadLPG; break;
+					case modeReadOSA: PTmode = modeReadLPG; break;
 					default: PTmode++; break;
 				}
 			}
@@ -748,6 +772,17 @@ int main (void) {
 					DF.checkSum += tmp;  // so the idea is to send the last byte as checksum BEFORE adding it to itself
 				}
 				cbi(PCreq, RESP_FAST_BIT);
+			}
+			if (PCreq & BV(RESP_OSA1_BIT)) {
+				DO.checkSum = 0;
+				DO.workMode = PTmode;
+				for (i = 0; i < DO.length; i++) {
+					if (!PCread) break;
+					tmp = *(volatile u08*)((void *)&DO + i);
+					PCSend(tmp);
+					DO.checkSum += tmp;  // so the idea is to send the last byte as checksum BEFORE adding it to itself
+				}
+				cbi(PCreq, RESP_OSA1_BIT);
 			}
 		} // PCread
 		if (PChead != PCtail)  sbi(UCSR0B, UDRIE0);  // enable UDR Empty Interrupt
