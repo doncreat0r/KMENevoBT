@@ -387,6 +387,7 @@ void ReadParamsEEPROM(void) {
 	u08 tmp;
 	u32 tmp32;
 
+	eeprom_busy_wait();
 	tmp = eeprom_read_byte((u08*)0);
 	if (tmp < 0xFF)  DR.LPGinjFlow = tmp;
 	tmp = eeprom_read_byte((u08*)1);
@@ -401,10 +402,12 @@ void ReadParamsEEPROM(void) {
 /////////////////////////////////////////////////////////
 void WriteParamsEEPROM(void) {
 	eeprom_busy_wait();
-
 	eeprom_update_dword((uint32_t*)2, (uint32_t)DS.totalLPGInTank);
+	eeprom_busy_wait();
 	eeprom_update_dword((uint32_t*)6, (uint32_t)DS.totalPETInTank);
-	DR.eepromUpdateCount++; eeprom_update_word((uint16_t*)10, DR.eepromUpdateCount);
+	eeprom_busy_wait();
+	DR.eepromUpdateCount++; 
+	eeprom_update_word((uint16_t*)10, DR.eepromUpdateCount);
 	sbi(PCreq, RESP_RARE_BIT);
 }
 
@@ -612,6 +615,7 @@ int main (void) {
 
 	wdt_disable();
 	InitParams();
+	ReadParamsEEPROM();
 
 	cbi(DDRD, PARK);
 	sbi(DDRC, PLED);
@@ -626,7 +630,6 @@ int main (void) {
 	TCCR2B = 0b111;		// BEWARE! Different set of bits for prescaler/1024 on T0 and T2 !!!
 	cbi(TIMSK2, TOIE2);	 // disable overflow
 	sbi(TIFR2, TOV2);
-	ReadParamsEEPROM();
 
 	// park assist init
 	PCMSK3 = (1<<PCINT28);
