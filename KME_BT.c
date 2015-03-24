@@ -95,6 +95,7 @@ volatile u08 PAchanged = 0;
 volatile u16 PAdata[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
 
 // EEPROM vars
+volatile u08 eepromDeadZone[200] EEMEM = {209, 176, 0};
 volatile u08 eepromLPGFlow EEMEM = 210;
 volatile u08 eepromPETFlow EEMEM = 177;
 volatile u32 eepromLPGTank EEMEM = 0;
