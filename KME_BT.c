@@ -94,6 +94,14 @@ volatile u08 PAcnt = 0;
 volatile u08 PAchanged = 0;
 volatile u16 PAdata[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
 
+// EEPROM vars
+volatile u08 eepromLPGFlow EEMEM = 210;
+volatile u08 eepromPETFlow EEMEM = 177;
+volatile u32 eepromLPGTank EEMEM = 0;
+volatile u32 eepromPETTank EEMEM = 0;
+volatile u16 eepromUpdCount EEMEM = 0;
+
+
 // ======================================================
 // Send byte to PC
 void PCSend(u08 data)
@@ -388,27 +396,31 @@ void ReadParamsEEPROM(void) {
 	u32 tmp32;
 
 	eeprom_busy_wait();
-	tmp = eeprom_read_byte((u08*)0);
+	tmp = eeprom_read_byte((u08*)&eepromLPGFlow);
 	if (tmp < 0xFF)  DR.LPGinjFlow = tmp;
-	tmp = eeprom_read_byte((u08*)1);
+	tmp = eeprom_read_byte((u08*)&eepromPETFlow);
 	if (tmp < 0xFF)  DR.PETinjFlow = tmp;
-	DR.eepromUpdateCount = eeprom_read_word((uint16_t*)10);
-	tmp32 = eeprom_read_dword((uint32_t*)2);
+	DR.eepromUpdateCount = eeprom_read_word((uint16_t*)&eepromUpdCount);
+	tmp32 = eeprom_read_dword((u32*)&eepromLPGTank);
 	if (tmp32 < 0xFFFFFFFF)  DS.totalLPGInTank = tmp32;
-	tmp32 = eeprom_read_dword((uint32_t*)6);
+	tmp32 = eeprom_read_dword((u32*)&eepromPETTank);
 	if (tmp32 < 0xFFFFFFFF)  DS.totalPETInTank = tmp32;
 }
 
 /////////////////////////////////////////////////////////
 void WriteParamsEEPROM(void) {
+	u08 _sreg = SREG;
+	cli();
 	eeprom_busy_wait();
-	eeprom_update_dword((uint32_t*)2, (uint32_t)DS.totalLPGInTank);
+	eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
 	eeprom_busy_wait();
-	eeprom_update_dword((uint32_t*)6, (uint32_t)DS.totalPETInTank);
-	eeprom_busy_wait();
+	eeprom_update_dword((u32*)&eepromPETTank, DS.totalPETInTank);
 	DR.eepromUpdateCount++; 
-	eeprom_update_word((uint16_t*)10, DR.eepromUpdateCount);
+	eeprom_busy_wait();
+	eeprom_update_word((uint16_t*)&eepromUpdCount, DR.eepromUpdateCount);
+	EEAR = 0xFF;			// atmega324 doesn't have any errata, but we'll try this trick anyway
 	sbi(PCreq, RESP_RARE_BIT);
+	SREG = _sreg;
 }
 
 /////////////////////////////////////////////////////////
@@ -616,6 +628,8 @@ int main (void) {
 	wdt_disable();
 	InitParams();
 	ReadParamsEEPROM();
+	// is BODLEVEL enabling the brown-out detection?
+	ReadParamsEEPROM();
 
 	cbi(DDRD, PARK);
 	sbi(DDRC, PLED);
@@ -663,19 +677,23 @@ int main (void) {
 			switch (tmp) {
 				case pcCmdRead: 		PCread = PCBuff[2];   // 0 - stop sending data to PC, 1 - readLive, 2 - readOSA
 										sbi(PCreq, RESP_RARE_BIT); break; 
-				case pcCmdAddLPG: 		cli(); DS.totalLPGInTank += DWORD(PPCBuff, 2); sei(); 
-										WriteParamsEEPROM(); break;
-				case pcCmdAddPET: 		cli(); DS.totalPETInTank += DWORD(PPCBuff, 2); sei(); 
-										WriteParamsEEPROM(); break;
+				case pcCmdAddLPG: 		cli(); DS.totalLPGInTank += DWORD(PPCBuff, 2); WriteParamsEEPROM(); sei(); 
+										break;
+				case pcCmdAddPET: 		cli(); DS.totalPETInTank += DWORD(PPCBuff, 2); WriteParamsEEPROM(); sei(); 
+										break;
 				case pcCmdResetTrip: 	cli();
 										DS.tripLPGSpent = 0; DS.tripLPGTime = 0; DS.tripLPGDist = 0; 
 										DS.tripPETSpent = 0; DS.tripPETTime = 0; DS.tripPETDist = 0;
 										sei();
 										break;
-				case pcCmdSetLPGInjFlow: DR.LPGinjFlow = PCBuff[2]; eeprom_busy_wait(); 
-										eeprom_update_byte((u08*)0, DR.LPGinjFlow); sbi(PCreq, RESP_RARE_BIT); break;
-				case pcCmdSetPETInjFLow: DR.PETinjFlow = PCBuff[2]; eeprom_busy_wait(); 
-										eeprom_update_byte((u08*)1, DR.PETinjFlow); sbi(PCreq, RESP_RARE_BIT); break;
+				case pcCmdSetLPGInjFlow: 
+										DR.LPGinjFlow = PCBuff[2]; 
+										WriteParamsEEPROM(); 
+										sbi(PCreq, RESP_RARE_BIT); break;
+				case pcCmdSetPETInjFLow: 
+										DR.PETinjFlow = PCBuff[2]; 
+										WriteParamsEEPROM();
+										sbi(PCreq, RESP_RARE_BIT); break;
 				case pcCmdReboot: 		PCSend('$');
 										sbi(UCSR0B, UDRIE0);  				// explicitly enable UDRIE0 before reset
 										wdt_enable(1); cli(); while(1); break;
