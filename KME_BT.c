@@ -92,7 +92,8 @@ volatile u08 parkMode = 0;			// parkMode: 0 - park assist not active, 1 - park a
 volatile u08 PAstep = 0; // steps are: sync, pause, 1st byte, 2nd byte, pause, 3rd byte, 4th byte, last bit, finish
 volatile u08 PAcnt = 0;
 volatile u08 PAchanged = 0;
-volatile u16 PAdata[2]; // each bit is 1ms, divided to 3 parts of 0.3333 ms
+volatile u16 PAcur[2]; // raw data from PA unit
+volatile u16 PAold[2]; // 
 
 // EEPROM vars
 volatile u08 eepromDeadZone[200] EEMEM = {209, 176, 0};
@@ -169,14 +170,14 @@ ISR(PCINT3_vect) {
 			if (tmr > 82 && tmr < 90 && prk) {  // long pause is 2ms
 				PAstep++;
 				PAcnt = 0;
-				PAdata[0] = 0;
+				PAcur[0] = 0;
 			} else 	
 				PAstep = 0;
 			break;
 		case 4: // decode 1st word - assuming we are at Nth bit negative edge
 			if (!(prk)) {
 				if (tmr > 10 && tmr < 20) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
-					PAdata[0] |= (1<<PAcnt);
+					PAcur[0] |= (1<<PAcnt);
 					PAcnt++;
 				} else {
 					if (tmr > 23 && tmr < 33)   // zerobit is about 0.33 ms, onebit is about 0.66 ms
@@ -191,7 +192,7 @@ ISR(PCINT3_vect) {
 		case 5:  // expect another pause for ~4.3 ms
 			if (tmr > 172 && tmr < 212 && prk) {  // another long pause is ~4.3ms
 				PAcnt = 0;
-				PAdata[1] = 0;
+				PAcur[1] = 0;
 				PAstep++;
 			} else 
 				PAstep = 0;
@@ -199,7 +200,7 @@ ISR(PCINT3_vect) {
 		case 6:
 			if (!(prk)) {
 				if (tmr > 10 && tmr < 22) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
-					PAdata[1] |= (1<<PAcnt);
+					PAcur[1] |= (1<<PAcnt);
 					PAcnt++;
 				} else {
 					if (tmr > 23 && tmr < 33)   // zerobit is about 0.33 ms, onebit is about 0.66 ms
@@ -409,9 +410,15 @@ void ReadParamsEEPROM(void) {
 }
 
 /////////////////////////////////////////////////////////
-void WriteParamsEEPROM(void) {
+void WriteParamsEEPROM(int withFlow) {
 	u08 _sreg = SREG;
 	cli();
+	if (withFlow) {
+		eeprom_busy_wait();
+		eeprom_update_byte((u08*)&eepromLPGFlow, DR.LPGinjFlow);
+		eeprom_busy_wait();
+		eeprom_update_byte((u08*)&eepromPETFlow, DR.PETinjFlow);
+	}
 	eeprom_busy_wait();
 	eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
 	eeprom_busy_wait();
@@ -464,7 +471,7 @@ ISR(SIG_OVERFLOW2) {
 			if (startCalc) {
 				startCalc = 0;
 				DF.LPGRPM = 0;
-				WriteParamsEEPROM();
+				WriteParamsEEPROM(0);
 			}
 		}
 	}
@@ -544,7 +551,7 @@ static inline void ParseLPGResponse() {
 	if (DF.LPGRPM) {
 		startCalc = 1;
 	} else {
-		if (startCalc) { WriteParamsEEPROM(); }
+		if (startCalc) { WriteParamsEEPROM(0); }
 		startCalc = 0;
 	}
 	if (startCalc)  CalcFuel(tmp);
@@ -609,11 +616,38 @@ void ReadTemperature() {
 
 /////////////////////////////////////////////////////////
 void ReadParkAssist() {
+	u08 crc1, crc2;
+
 	cli();
 	PAchanged = 0;
-	if (DP.P1 != PAdata[0] || DP.P2 != PAdata[1]) {
-		DP.P1 = PAdata[0];
-		DP.P2 = PAdata[1];
+	if (PAold[0] != PAcur[0] || PAold[1] != PAcur[1]) {
+		PAold[0] = PAcur[0];
+		PAold[1] = PAcur[1];
+		sei();  // rls ints ASAP
+		DP.CM = 0x0F - ( ((PAold[0]>>2) & 0x0C) + ((PAold[0]>>12) & 0x03) );
+
+		DP.A = (PAold[1]>>12) & 0x0F;
+		DP.B = ((PAold[0] & 7)<<2) + ((PAold[0]>>14) & 0x03);
+ 		DP.C = ((PAold[0]>>6) & 0x03) + (((PAold[0]>>8) & 0x07)<<2);
+ 		DP.D = ((PAold[1]>>8) & 0x0F);
+
+		crc1 = (((DP.C & 0x0F) + (DP.B & 0x0F) + DP.D) - 1); 
+		crc2 = ((crc1>>4) ^ 3) - (((DP.A>>2) & 0x0F) + ((DP.B>>2) & 0x0F) + ((DP.D>>4) & 0x0F));
+
+		DP.A = 0x0F - DP.A;
+		DP.B = 0x1F - DP.B;
+		DP.C = 0x1F - DP.C;
+		DP.D = 0x0F - DP.D;
+
+		DP.status = 0;
+		DP.status |= (DP.A != 0x0F - 2)<<0;
+		DP.status |= (DP.B != 0x1F - 4)<<1;
+		DP.status |= (DP.C != 0x1F - 4)<<2;
+		DP.status |= (DP.D != 0x0F - 2)<<3;
+
+		DP.status |= ((crc1 & 0x0F) == (PAold[1] & 0x0F))<<4;
+		DP.status |= ((crc2 & 0x0F) == ((PAold[1]>>4) & 0x0F))<<5;
+
 		sbi(PCreq, RESP_PARK_BIT); // send PA buffer
 	}
 	sei();
@@ -630,7 +664,7 @@ int main (void) {
 	InitParams();
 	ReadParamsEEPROM();
 	// is BODLEVEL enabling the brown-out detection?
-	ReadParamsEEPROM();
+	//ReadParamsEEPROM();
 
 	cbi(DDRD, PARK);
 	sbi(DDRC, PLED);
@@ -670,7 +704,7 @@ int main (void) {
 		// park assist data
 		if (PAchanged)  ReadParkAssist();
 		if (parkMode && TCNT1 > 10000) {
-			parkMode = 0;  DP.P1 = 0;  DP.P2 = 0;
+			parkMode = 0;  DP.status = 0; 
 		}
 		// incoming commands
 		if (PCgr == pcCmdOK) {
@@ -678,9 +712,9 @@ int main (void) {
 			switch (tmp) {
 				case pcCmdRead: 		PCread = PCBuff[2];   // 0 - stop sending data to PC, 1 - readLive, 2 - readOSA
 										sbi(PCreq, RESP_RARE_BIT); break; 
-				case pcCmdAddLPG: 		cli(); DS.totalLPGInTank += DWORD(PPCBuff, 2); WriteParamsEEPROM(); sei(); 
+				case pcCmdAddLPG: 		cli(); DS.totalLPGInTank += DWORD(PPCBuff, 2); WriteParamsEEPROM(0); sei(); 
 										break;
-				case pcCmdAddPET: 		cli(); DS.totalPETInTank += DWORD(PPCBuff, 2); WriteParamsEEPROM(); sei(); 
+				case pcCmdAddPET: 		cli(); DS.totalPETInTank += DWORD(PPCBuff, 2); WriteParamsEEPROM(0); sei(); 
 										break;
 				case pcCmdResetTrip: 	cli();
 										DS.tripLPGSpent = 0; DS.tripLPGTime = 0; DS.tripLPGDist = 0; 
@@ -689,11 +723,11 @@ int main (void) {
 										break;
 				case pcCmdSetLPGInjFlow: 
 										DR.LPGinjFlow = PCBuff[2]; 
-										WriteParamsEEPROM(); 
+										WriteParamsEEPROM(1); 
 										sbi(PCreq, RESP_RARE_BIT); break;
 				case pcCmdSetPETInjFLow: 
 										DR.PETinjFlow = PCBuff[2]; 
-										WriteParamsEEPROM();
+										WriteParamsEEPROM(1);
 										sbi(PCreq, RESP_RARE_BIT); break;
 				case pcCmdReboot: 		PCSend('$');
 										sbi(UCSR0B, UDRIE0);  				// explicitly enable UDRIE0 before reset

@@ -112,9 +112,14 @@ struct strucResponsePark {
 	u08 length;
 	u08 type;				// response type (RESP_XXX)
 	u08 workMode;
-	//
-	u16 P1;
-	u16 P2;
+	// distance in 10cm values for all sensors + centimeters for closest one
+	u08 A;
+	u08 B;
+	u08 C;
+	u08 D;
+	u08 CM;
+	// bits: sensor A, B, C, D connected, CRC1 OK, CRC2 OK
+	u08 status;
 	//
 	u08 checkSum;
 }__attribute__((__packed__ )) DP;
