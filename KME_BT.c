@@ -146,28 +146,28 @@ ISR(PCINT3_vect) {
 	tmr = TCNT1;
 	TCNT1 = 0;		// always rearm the timer
 	prk = PIND & BV(PARK);
-	if (prk)  parkMode = 1;
+	if (prk)  parkMode = 1;  // TODO: check if MAX485 output is zero when A and B lines are 0V.
 	switch (PAstep) {
 		case 0: // no sync, got 1st positive front
-			if (prk) {
+			if (!prk) {
 				PAstep++;  PAcnt = 0;  // next step is sync count, zero sync counter 
 			}
 			break;
 		case 1:
-			if (tmr > 16 && tmr < 20)  // if time from last change between 0,37 ms and 0,64 ms
+			if (tmr > 12 && tmr < 28)  // if time from last change between 0,37 ms and 0,64 ms
 				PAcnt++;
 			else
 				PAstep = 0;
 			if (PAcnt > 9)  PAstep++;
 			break;
 		case 2: // expect a long pulse
-			if (tmr > 41 && tmr < 46 && !(prk))  // long pulse is 1ms
+			if (tmr > 40 && tmr < 48 && (prk))  // long pulse is 1ms
 				PAstep++;
 			else 
 				PAstep = 0;
 			break;
 		case 3: // expect a 2ms pause - assuming we are at 1st positive edge of 1st message bit
-			if (tmr > 82 && tmr < 90 && prk) {  // long pause is 2ms
+			if (tmr > 80 && tmr < 92 && !prk) {  // long pause is 2ms
 				PAstep++;
 				PAcnt = 0;
 				PAcur[0] = 0;
@@ -175,8 +175,8 @@ ISR(PCINT3_vect) {
 				PAstep = 0;
 			break;
 		case 4: // decode 1st word - assuming we are at Nth bit negative edge
-			if (!(prk)) {
-				if (tmr > 10 && tmr < 20) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
+			if ((prk)) {
+				if (tmr > 10 && tmr < 22) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
 					PAcur[0] |= (1<<PAcnt);
 					PAcnt++;
 				} else {
@@ -190,7 +190,7 @@ ISR(PCINT3_vect) {
 			if (tmr > 200)  PAstep = 0;
 			break;
 		case 5:  // expect another pause for ~4.3 ms
-			if (tmr > 172 && tmr < 212 && prk) {  // another long pause is ~4.3ms
+			if (tmr > 172 && tmr < 212 && !prk) {  // another long pause is ~4.3ms
 				PAcnt = 0;
 				PAcur[1] = 0;
 				PAstep++;
@@ -198,7 +198,7 @@ ISR(PCINT3_vect) {
 				PAstep = 0;
 			break;
 		case 6:
-			if (!(prk)) {
+			if ((prk)) {
 				if (tmr > 10 && tmr < 22) {  // zerobit is about 0.33 ms, onebit is about 0.66 ms
 					PAcur[1] |= (1<<PAcnt);
 					PAcnt++;
@@ -213,6 +213,8 @@ ISR(PCINT3_vect) {
 			if (tmr > 200)  PAstep = 0;
 			break;
 		case 7:
+			DP.P1 = PAcur[0];
+			DP.P2 = PAcur[1];
 			PAchanged = 1;
 			PAstep++;
 			break;

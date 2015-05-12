@@ -112,6 +112,9 @@ struct strucResponsePark {
 	u08 length;
 	u08 type;				// response type (RESP_XXX)
 	u08 workMode;
+	// raw values
+	u16 P1;
+	u16 P2;
 	// distance in 10cm values for all sensors + centimeters for closest one
 	u08 A;
 	u08 B;
