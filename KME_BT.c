@@ -86,7 +86,6 @@ volatile u08 PCread = 0;			// when PC read > 0 we're reading data from ECU and c
 //
 volatile u08 startCalc = 0; 		// start calc after RPM > 0
 volatile u08 tempMode = 0;			// tempMode: 0 - skiprom/begin measure, 1 - wait for measure end, 2 - read temp value
-volatile u08 parkMode = 0;			// parkMode: 0 - park assist not active, 1 - park assist active
 
 // park assist decoder
 volatile u08 PAstep = 0; // steps are: sync, pause, 1st byte, 2nd byte, pause, 3rd byte, 4th byte, last bit, finish
@@ -146,7 +145,7 @@ ISR(PCINT3_vect) {
 	tmr = TCNT1;
 	TCNT1 = 0;		// always rearm the timer
 	prk = PIND & BV(PARK);
-	if (prk)  parkMode = 1;  // TODO: check if MAX485 output is zero when A and B lines are 0V.
+	if (prk)  sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // TODO: check if MAX485 output is zero when A and B lines are 0V.
 	switch (PAstep) {
 		case 0: // no sync, got 1st positive front
 			if (!prk) {
@@ -524,9 +523,9 @@ static inline void ParseLPGResponse() {
 	if ( DF.PETsuminjtime && 
 		(GetInjMax(inj1, inj2, inj3, inj4) / (DF.PETsuminjtime/40) > MaxInjDeviation || 
 		 GetInjMin(inj1, inj2, inj3, inj4) / (DF.PETsuminjtime/40) < MinInjDeviation) ) 
-		sbi(DF.LPGerrBits, 0);
+		sbi(DF.LPGstatusBits, STATUS_PET_TIME_MISMATCH);
 	else
-		cbi(DF.LPGerrBits, 0);
+		cbi(DF.LPGstatusBits, STATUS_PET_TIME_MISMATCH);
 	inj1 = (KMEBuff[19]<<8) + KMEBuff[20]; 
 	inj2 = (KMEBuff[21]<<8) + KMEBuff[22]; 
 	inj3 = (KMEBuff[23]<<8) + KMEBuff[24]; 
@@ -535,9 +534,9 @@ static inline void ParseLPGResponse() {
 	if ( DF.LPGsuminjtime && 
 		(GetInjMax(inj1, inj2, inj3, inj4) / (DF.LPGsuminjtime/40) > MaxInjDeviation || 
 		 GetInjMin(inj1, inj2, inj3, inj4) / (DF.LPGsuminjtime/40) < MinInjDeviation) ) 
-		sbi(DF.LPGerrBits, 1);
+		sbi(DF.LPGstatusBits, STATUS_LPG_TIME_MISMATCH);
 	else
-		cbi(DF.LPGerrBits, 1);
+		cbi(DF.LPGstatusBits, STATUS_LPG_TIME_MISMATCH);
 	DF.LPGRPM = (KMEBuff[35]<<8) + KMEBuff[36];
 	DF.LPGPcol = (KMEBuff[41]<<8) + KMEBuff[42];
 	DF.LPGPsys = (KMEBuff[43]<<8) + KMEBuff[44];
@@ -705,8 +704,8 @@ int main (void) {
 		}
 		// park assist data
 		if (PAchanged)  ReadParkAssist();
-		if (parkMode && TCNT1 > 10000) {
-			parkMode = 0;  DP.status = 0; 
+		if ((DF.LPGstatusBits & STATUS_PARKMODE_ACTIVE) && TCNT1 > 10000) {
+			cbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  DP.status = 0; 
 		}
 		// incoming commands
 		if (PCgr == pcCmdOK) {
@@ -756,6 +755,7 @@ int main (void) {
 				case bRespOSA:
 					ParseOSAResponse();
 					sbi(PCreq, RESP_OSA1_BIT);
+					// TODO: May be check if OSA table has been changed before just sending it everytime?
 					break;
 			}
 			// check for valid response to our own request and switch to next request 

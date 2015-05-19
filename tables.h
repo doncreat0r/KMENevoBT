@@ -29,6 +29,11 @@
 #define RESP_PARK_BIT 3		// park assist response
 #define RESP_OSA1_BIT 4		// OSA 1 Bank response
 
+// bits for status
+#define STATUS_PET_TIME_MISMATCH 0
+#define STATUS_LPG_TIME_MISMATCH 1
+#define STATUS_PARKMODE_ACTIVE 2
+
 // fast updating structure (twice a sec or so)
 struct strucResponseFast {
 	u08 id;					// id = 0x42
@@ -52,10 +57,11 @@ struct strucResponseFast {
 	u08 OBDerror;
 	u08 OBDTPS;
 	u08 OBDLoad;
-	// error bits:
-	// 0 - some LPG injector time much longer or shorter than others
-	// 1 - some PET injector time much longer or shorter than others
-	u08 LPGerrBits;
+	// status bits:
+	// 0 - some PET injector time much longer or shorter than others
+	// 1 - some LPG injector time much longer or shorter than others
+	// 2 - parkmode is active
+	u08 LPGstatusBits;
 	// fast updating fuel consumptions
 	u16 cycleAvgLPGPerHour;
 	u16 cycleAvgPETPerHour;
