@@ -145,7 +145,7 @@ ISR(PCINT3_vect) {
 	tmr = TCNT1;
 	TCNT1 = 0;		// always rearm the timer
 	prk = PIND & BV(PARK);
-	if (prk)  sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // TODO: check if MAX485 output is zero when A and B lines are 0V.
+	if (!prk)  sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // TODO: check if MAX485 output is zero when A and B lines are 0V.
 	switch (PAstep) {
 		case 0: // no sync, got 1st positive front
 			if (!prk) {
@@ -704,7 +704,7 @@ int main (void) {
 		}
 		// park assist data
 		if (PAchanged)  ReadParkAssist();
-		if ((DF.LPGstatusBits & STATUS_PARKMODE_ACTIVE) && TCNT1 > 10000) {
+		if ((DF.LPGstatusBits & BV(STATUS_PARKMODE_ACTIVE)) && TCNT1 > 10000) {
 			cbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  DP.status = 0; 
 		}
 		// incoming commands
@@ -743,11 +743,13 @@ int main (void) {
 				case bRespLPG:  // got 0x06 (LPG info) 
 					ParseLPGResponse();
 					sbi(PCreq, RESP_FAST_BIT);
-					// also transmit SLOW data after each two FAST data
-					if (++fastCnt > 2) {
+					fastCnt++; // byte overflow 
+					// also transmit SLOW data after each four FAST data
+					if ((fastCnt & 0b11) == 0b11) 
 						sbi(PCreq, RESP_SLOW_BIT);
-						fastCnt = 0;
-					}
+				    // also transmit PARK data if parmode after each eight FAST data
+					if ((DF.LPGstatusBits & BV(STATUS_PARKMODE_ACTIVE)) && ((fastCnt & 0b111) == 0b111))
+						sbi(PCreq, RESP_PARK_BIT); // send PA buffer
 					break;
 				case bRespOBD:  // got 0xB1 (OBD info) 
 					ParseOBDResponse();
