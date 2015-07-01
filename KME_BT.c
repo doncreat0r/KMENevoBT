@@ -140,11 +140,9 @@ static inline void StartT2(void) {
 
 // ======================================================
 ISR(PCINT3_vect) {
-	u16 tmr;
-	u08 prk;
-	tmr = TCNT1;
+	u16 tmr = TCNT1;
+	u08 prk = PIND & BV(PARK);
 	TCNT1 = 0;		// always rearm the timer
-	prk = PIND & BV(PARK);
 	if (!prk)  sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // TODO: check if MAX485 output is zero when A and B lines are 0V.
 	switch (PAstep) {
 		case 0: // no sync, got 1st positive front
@@ -546,9 +544,16 @@ static inline void ParseLPGResponse() {
 	DF.LPGStatus = KMEBuff[58];
 	corrPres = KMEBuff[106];
 	corrTemp = KMEBuff[107];
+	// petrol switch strategies
+	if ((KMEBuff[96] & 0x08) || (KMEBuff[97] & 0x3F) || (KMEBuff[98] & 0x06))
+		sbi(DF.LPGstatusBits, STATUS_PETROL_SWITCH);
+	else
+		cbi(DF.LPGstatusBits, STATUS_PETROL_SWITCH);
 	sei();
 	// start calculating fuel consumption if RPM becomes nonzero
 	// save calculated to EEPROM if RPM becomes zero (engine stopped)
+	// TODO: more correct "engine stopped" condition: SPEED = 0, STFT = 0, PETinjtime = 0 
+	// or ENGINE LOAD = 0 ??
 	if (DF.LPGRPM) {
 		startCalc = 1;
 	} else {
@@ -621,7 +626,8 @@ void ReadParkAssist() {
 
 	cli();
 	PAchanged = 0;
-	if (PAold[0] != PAcur[0] || PAold[1] != PAcur[1]) {
+	//if (PAold[0] != PAcur[0] || PAold[1] != PAcur[1]) 
+	{
 		PAold[0] = PAcur[0];
 		PAold[1] = PAcur[1];
 		sei();  // rls ints ASAP
@@ -704,7 +710,7 @@ int main (void) {
 		}
 		// park assist data
 		if (PAchanged)  ReadParkAssist();
-		if ((DF.LPGstatusBits & BV(STATUS_PARKMODE_ACTIVE)) && TCNT1 > 10000) {
+		if ((DF.LPGstatusBits & BV(STATUS_PARKMODE_ACTIVE)) && TCNT1 > 30000) {
 			cbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  DP.status = 0; 
 		}
 		// incoming commands

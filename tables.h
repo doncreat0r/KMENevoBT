@@ -33,6 +33,7 @@
 #define STATUS_PET_TIME_MISMATCH 0
 #define STATUS_LPG_TIME_MISMATCH 1
 #define STATUS_PARKMODE_ACTIVE 2
+#define STATUS_PETROL_SWITCH 3
 
 // fast updating structure (twice a sec or so)
 struct strucResponseFast {
@@ -61,6 +62,7 @@ struct strucResponseFast {
 	// 0 - some PET injector time much longer or shorter than others
 	// 1 - some LPG injector time much longer or shorter than others
 	// 2 - parkmode is active
+	// 3 - some switch to petrol strategy activated
 	u08 LPGstatusBits;
 	// fast updating fuel consumptions
 	u16 cycleAvgLPGPerHour;
@@ -239,7 +241,9 @@ static inline void CalcFuel(u16 cDelay) {
 	// counting totals based on current fuel source - LPG/Petrol
 	cRPMs = (u32)(DF.LPGRPM / 5 * cDelay);
 	cDist = (cycleVspeed[cIdx] * cDelay * 10 / 36);  // in centimeters!
-	if (cycleStatus[cIdx] == 5) {
+	// if in LPG mode and none of petrol switch strategies activated - calc LPG
+	// TODO: is there ANY way to calculate enrichment modes correctly?
+	if ((cycleStatus[cIdx] == 5) && !(DF.LPGstatusBits & STATUS_PETROL_SWITCH)) {
 		cInjT = (u32)(DF.LPGsuminjtime) * cRPMs / 100 * (100 - corrPres) / 100 * (100 - corrTemp);
 		cSpent = (u32)(cInjT / 2692800L * DR.LPGinjFlow);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );  // /10 would be milliseconds
