@@ -267,7 +267,7 @@ static inline void CalcFuel(u16 cDelay) {
 		DS.tripPETDist += cDist; 
 	}
 	// remove the tail values from counters
-	if (cycleStatus[cTail] == 5){
+	if ((cycleStatus[cTail] == 5) && !(DF.LPGstatusBits & STATUS_PETROL_SWITCH)){
 		cycleTotalLPG -= cycleInjTime[cTail];
 		cycleTotalLPGDelay -= cycleDelay[cTail];
 		cycleTotalLPGDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm
