@@ -147,6 +147,18 @@ struct strucResponseOSA1 {
 	u08 checkSum;
 }__attribute__((__packed__ )) DO;
 
+//internal data from KME which is not transmitted to PC
+struct strucResponseInternal {
+	u08 id;
+	u08 length;
+	u08 type;
+	u08 workMode;
+	//
+	u08 LPGLoad;
+	//
+	u08 checkSum;
+}__attribute__((__packed__ )) DI;
+
 // KME Nevo requests
 // response to 1st request (get hw conf) kept in the request buffer (offset+16)
 // we'll send it to the KME software while KME Nevo finishing it's previous transmission
@@ -243,7 +255,7 @@ static inline void CalcFuel(u16 cDelay) {
 	cDist = (cycleVspeed[cIdx] * cDelay * 10 / 36);  // in centimeters!
 	// if in LPG mode and none of petrol switch strategies activated - calc LPG
 	// TODO: is there ANY way to calculate enrichment modes correctly?
-	if ((cycleStatus[cIdx] == 5) && !(DF.LPGstatusBits & STATUS_PETROL_SWITCH)) {
+	if (DF.LPGStatus == 5) {
 		cInjT = (u32)(DF.LPGsuminjtime) * cRPMs / 100 * (100 - corrPres) / 100 * (100 - corrTemp);
 		cSpent = (u32)(cInjT / 2692800L * DR.LPGinjFlow);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );  // /10 would be milliseconds
@@ -254,7 +266,7 @@ static inline void CalcFuel(u16 cDelay) {
 		DS.tripLPGTime += cDelay;
 		cycleTotalLPGDist += cDist;  // in centimeters!!
 		DS.tripLPGDist += cDist; 
-	} else if (cycleStatus[cIdx] > 2 && cRPMs > 0) {  // if RPM > 0 and status = 3 - driving on petrol, status = 4 - warming on petrol
+	} else if (DF.LPGStatus > 2 && cRPMs > 0) {  // if RPM > 0 and status = 3 - driving on petrol, status = 4 - warming on petrol
 		cInjT = (u32)(DF.PETsuminjtime) * cRPMs * 2; // doubling to fit pet injflow to 1 byte
 		cSpent = (u32)(cInjT / 2692800L * DR.PETinjFlow);
 		cycleInjTime[cIdx] = (u16)( cInjT / 448800L );
@@ -267,7 +279,7 @@ static inline void CalcFuel(u16 cDelay) {
 		DS.tripPETDist += cDist; 
 	}
 	// remove the tail values from counters
-	if ((cycleStatus[cTail] == 5) && !(DF.LPGstatusBits & STATUS_PETROL_SWITCH)){
+	if (cycleStatus[cTail] == 5) {
 		cycleTotalLPG -= cycleInjTime[cTail];
 		cycleTotalLPGDelay -= cycleDelay[cTail];
 		cycleTotalLPGDist -= (cycleVspeed[cTail] * cycleDelay[cTail] * 10 / 36);  // cm

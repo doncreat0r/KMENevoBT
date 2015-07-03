@@ -544,22 +544,24 @@ static inline void ParseLPGResponse() {
 	DF.LPGStatus = KMEBuff[58];
 	corrPres = KMEBuff[106];
 	corrTemp = KMEBuff[107];
+	DI.LPGLoad = KMEBuff[112];
 	// petrol switch strategies
-	if ((KMEBuff[96] & 0x08) || (KMEBuff[97] & 0x3F) || (KMEBuff[98] & 0x06))
+	if ((KMEBuff[96] & 0x08) || (KMEBuff[97] & 0x3F) || (KMEBuff[98] & 0x06)) {
 		sbi(DF.LPGstatusBits, STATUS_PETROL_SWITCH);
-	else
+		DF.LPGStatus = 4;  // force  "petrol warming" mode
+	} else
 		cbi(DF.LPGstatusBits, STATUS_PETROL_SWITCH);
 	sei();
-	// start calculating fuel consumption if RPM becomes nonzero
-	// save calculated to EEPROM if RPM becomes zero (engine stopped)
-	// TODO: more correct "engine stopped" condition: SPEED = 0, STFT = 0, PETinjtime = 0 
-	// or ENGINE LOAD = 0 ??
-	if (DF.LPGRPM) {
+	// start calculating fuel consumption if engine load > 0 (engine started)
+	// stop calculating if load = 0 and RPM < 1000 (engine idling), fuel cutoff mode shouldn't activate below 1000
+	// save calculated to EEPROM if calculation was started
+	if (DI.LPGLoad) {
 		startCalc = 1;
-	} else {
-		if (startCalc) { WriteParamsEEPROM(0); }
-		startCalc = 0;
-	}
+	} else 
+		if (DF.LPGRPM < 1000) {
+			if (startCalc) { WriteParamsEEPROM(0); }
+			startCalc = 0;
+		}
 	if (startCalc)  CalcFuel(tmp);
 	sbi(PINC, PLED);
 }
