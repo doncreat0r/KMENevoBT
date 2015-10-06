@@ -110,6 +110,7 @@ struct strucResponseRare {
 	u16 eepromUpdateCount;
 	u08 LPGinjFlow;
 	u08 PETinjFlow;
+	s08 SpeedCorr;			// in case u use non stock tyres - here's speed correction in %, can be negative too
 	//
 	u08 checkSum;
 }__attribute__((__packed__ )) DR;

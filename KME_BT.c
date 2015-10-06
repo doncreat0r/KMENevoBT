@@ -46,13 +46,16 @@
 #define pcCmdResetTrip 3
 #define pcCmdSetLPGInjFlow 8
 #define pcCmdSetPETInjFLow 9
+#define pcCmdSetSpeedCorr 10
 #define pcCmdReboot 0xFF
 
 // what to read from LPG ECU
 #define PCreadLive 1				// read live LPG and OBD data
 #define PCreadOSA 2					// read OSA table as well
 
-// Why all vars are volatile? Because  I need to know memory total consumption w/o any optimizations
+// Why all vars are volatile? 
+// Because I need to know total memory consumption w/o any optimizations 
+// in case of a large chuck of code being commented out for testing purposes
 
 // work mode
 volatile u08 PTmode = modeSearch;	// current work mode
@@ -96,11 +99,12 @@ volatile u16 PAold[2]; //
 
 // EEPROM vars
 volatile u08 eepromDeadZone[200] EEMEM = {209, 176, 0};
-volatile u08 eepromLPGFlow EEMEM = 210;
+volatile u08 eepromLPGFlow EEMEM = 225;
 volatile u08 eepromPETFlow EEMEM = 177;
 volatile u32 eepromLPGTank EEMEM = 0;
 volatile u32 eepromPETTank EEMEM = 0;
 volatile u16 eepromUpdCount EEMEM = 0;
+volatile s08 eepromSpeedCor EEMEM = 1;
 
 
 // ======================================================
@@ -366,8 +370,9 @@ void InitParams(void) {
 	UCSR0C = 1<<UCSZ01|1<<UCSZ00|0<<USBS1; 
 
 	DATAtimer = 100*28;
-	DR.LPGinjFlow = 200;  
+	DR.LPGinjFlow = 225;  
 	DR.PETinjFlow = 177; // doubled in the formula
+	DR.SpeedCorr = 0;
 
 	DF.id = 0x42;
 	DF.length = sizeof(DF);
@@ -401,6 +406,8 @@ void ReadParamsEEPROM(void) {
 	if (tmp < 0xFF)  DR.LPGinjFlow = tmp;
 	tmp = eeprom_read_byte((u08*)&eepromPETFlow);
 	if (tmp < 0xFF)  DR.PETinjFlow = tmp;
+	tmp = eeprom_read_byte((u08*)&eepromSpeedCor);
+	if (tmp < 0xFF)  DR.SpeedCorr = tmp;
 	DR.eepromUpdateCount = eeprom_read_word((uint16_t*)&eepromUpdCount);
 	tmp32 = eeprom_read_dword((u32*)&eepromLPGTank);
 	if (tmp32 < 0xFFFFFFFF)  DS.totalLPGInTank = tmp32;
@@ -417,6 +424,8 @@ void WriteParamsEEPROM(int withFlow) {
 		eeprom_update_byte((u08*)&eepromLPGFlow, DR.LPGinjFlow);
 		eeprom_busy_wait();
 		eeprom_update_byte((u08*)&eepromPETFlow, DR.PETinjFlow);
+		eeprom_busy_wait();
+		eeprom_update_byte((u08*)&eepromSpeedCor, DR.SpeedCorr);
 	}
 	eeprom_busy_wait();
 	eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
@@ -484,6 +493,12 @@ ISR(SIG_OVERFLOW2) {
 	}
 	// used for 1wire temperature readings
 	DATAtimer++;
+}
+
+/////////////////////////////////////////////////////////
+ISR(BADISR_vect)
+{
+// user code here
 }
 
 /////////////////////////////////////////////////////////
@@ -573,6 +588,8 @@ static inline void ParseOBDResponse() {
 	KMEtimeOBD = 0;
 	DF.OBDRPM = (KMEBuff[31]<<8) + KMEBuff[32];
 	DF.OBDSpeed = KMEBuff[33];
+	// if speed correction value available
+	if (DR.SpeedCorr) DF.OBDSpeed += (KMEBuff[33] + (50 / DR.SpeedCorr) & 0x7F) / (100 / DR.SpeedCorr);
 	sei();
 	DF.OBDLoad  = KMEBuff[34];
 	DS.OBDECT   = KMEBuff[35];
@@ -736,6 +753,10 @@ int main (void) {
 										sbi(PCreq, RESP_RARE_BIT); break;
 				case pcCmdSetPETInjFLow: 
 										DR.PETinjFlow = PCBuff[2]; 
+										WriteParamsEEPROM(1);
+										sbi(PCreq, RESP_RARE_BIT); break;
+				case pcCmdSetSpeedCorr:
+										DR.SpeedCorr = PCBuff[2]; 
 										WriteParamsEEPROM(1);
 										sbi(PCreq, RESP_RARE_BIT); break;
 				case pcCmdReboot: 		PCSend('$');
