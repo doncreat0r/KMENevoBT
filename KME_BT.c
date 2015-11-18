@@ -419,6 +419,10 @@ void ReadParamsEEPROM(void) {
 void WriteParamsEEPROM(int withFlow) {
 	u08 _sreg = SREG;
 	cli();
+	// slow down the clock while writing to EEPROM
+	CLKPR = (1<<CLKPCE);
+	CLKPR = (1<<CLKPS2);  // set clock divider to 16
+	nop();nop();
 	if (withFlow) {
 		eeprom_busy_wait();
 		eeprom_update_byte((u08*)&eepromLPGFlow, DR.LPGinjFlow);
@@ -434,6 +438,9 @@ void WriteParamsEEPROM(int withFlow) {
 	DR.eepromUpdateCount++; 
 	eeprom_busy_wait();
 	eeprom_update_word((uint16_t*)&eepromUpdCount, DR.eepromUpdateCount);
+	// clock back to nominal
+	CLKPR = (1<<CLKPCE);
+	CLKPR = 0;
 	EEAR = 0xFF;			// atmega324 doesn't have any errata, but we'll try this trick anyway
 	sbi(PCreq, RESP_RARE_BIT);
 	SREG = _sreg;
@@ -589,7 +596,7 @@ static inline void ParseOBDResponse() {
 	DF.OBDRPM = (KMEBuff[31]<<8) + KMEBuff[32];
 	DF.OBDSpeed = KMEBuff[33];
 	// if speed correction value available
-	if (DR.SpeedCorr) DF.OBDSpeed += (KMEBuff[33] + (50 / DR.SpeedCorr) & 0x7F) / (100 / DR.SpeedCorr);
+	if (DR.SpeedCorr) DF.OBDSpeed += (KMEBuff[33] + ((50 / DR.SpeedCorr) & 0x7F)) / (100 / DR.SpeedCorr);
 	sei();
 	DF.OBDLoad  = KMEBuff[34];
 	DS.OBDECT   = KMEBuff[35];
