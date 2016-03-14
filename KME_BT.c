@@ -98,14 +98,14 @@ volatile u16 PAcur[2]; // raw data from PA unit
 volatile u16 PAold[2]; // 
 
 // EEPROM vars
-volatile u08 eepromDeadZone[200] EEMEM = {209, 176, 0};
-volatile u08 eepromLPGFlow EEMEM = 225;
-volatile u08 eepromPETFlow EEMEM = 177;
+volatile u08 eepromDeadZone[202] EEMEM = {209, 176, 0};
 volatile u32 eepromLPGTank EEMEM = 0;
 volatile u32 eepromPETTank EEMEM = 0;
 volatile u16 eepromUpdCount EEMEM = 0;
+volatile u08 eepromDeadZone2[200] EEMEM = {0, 0, 0};
 volatile s08 eepromSpeedCor EEMEM = 1;
-
+volatile u08 eepromLPGFlow EEMEM = 225;
+volatile u08 eepromPETFlow EEMEM = 177;
 
 // ======================================================
 // Send byte to PC
@@ -727,6 +727,8 @@ int main (void) {
 	StartT2();  // start 10ms counting helper timer immediately
 
 	tempEnabled = ow_reset();
+	if (!tempEnabled)  tempEnabled = ow_reset();  // 2nd attempt
+		
 
 	while (1) {
 		if (tempEnabled)  ReadTemperature();
@@ -766,7 +768,8 @@ int main (void) {
 										DR.SpeedCorr = PCBuff[2]; 
 										WriteParamsEEPROM(1);
 										sbi(PCreq, RESP_RARE_BIT); break;
-				case pcCmdReboot: 		PCSend('$');
+				case pcCmdReboot: 		WriteParamsEEPROM(0);   //save spent fuel before reboot
+										PCSend('$');
 										sbi(UCSR0B, UDRIE0);  				// explicitly enable UDRIE0 before reset
 										wdt_enable(1); cli(); while(1); break;
 
