@@ -373,6 +373,7 @@ void InitParams(void) {
 	DR.LPGinjFlow = 225;  
 	DR.PETinjFlow = 177; // doubled in the formula
 	DR.SpeedCorr = 0;
+	DF.LPGstatusBits = 0;
 
 	DF.id = 0x42;
 	DF.length = sizeof(DF);
@@ -607,6 +608,10 @@ static inline void ParseOBDResponse() {
 	DF.OBDLTFT  = KMEBuff[28];
 	DF.OBDerror = KMEBuff[26];
 	DF.OBDTPS   = KMEBuff[41];
+	if ((KMEBuff[43] & 0x0F) == 2)
+		sbi(DF.LPGstatusBits, STATUS_OBD_CLOSED_LOOP);
+	else
+		cbi(DF.LPGstatusBits, STATUS_OBD_CLOSED_LOOP);
 	sbi(PINC, PLED);
 }
 /////////////////////////////////////////////////////////

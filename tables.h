@@ -34,6 +34,7 @@
 #define STATUS_LPG_TIME_MISMATCH 1
 #define STATUS_PARKMODE_ACTIVE 2
 #define STATUS_PETROL_SWITCH 3
+#define STATUS_OBD_CLOSED_LOOP 4
 
 // fast updating structure (twice a sec or so)
 struct strucResponseFast {
@@ -63,6 +64,7 @@ struct strucResponseFast {
 	// 1 - some LPG injector time much longer or shorter than others
 	// 2 - parkmode is active
 	// 3 - some switch to petrol strategy activated
+	// 4 - engine in closed loop/oxygen sensor correction active
 	u08 LPGstatusBits;
 	// fast updating fuel consumptions
 	u16 cycleAvgLPGPerHour;
