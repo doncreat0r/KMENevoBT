@@ -608,7 +608,7 @@ static inline void ParseOBDResponse() {
 	DF.OBDLTFT  = KMEBuff[28];
 	DF.OBDerror = KMEBuff[26];
 	DF.OBDTPS   = KMEBuff[41];
-	if ((KMEBuff[43] & 0x0F) == 2)
+	if ((KMEBuff[42] & 0x0F) == 2)
 		sbi(DF.LPGstatusBits, STATUS_OBD_CLOSED_LOOP);
 	else
 		cbi(DF.LPGstatusBits, STATUS_OBD_CLOSED_LOOP);
