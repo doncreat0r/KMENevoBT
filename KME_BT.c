@@ -147,7 +147,7 @@ ISR(PCINT3_vect) {
 	u16 tmr = TCNT1;
 	u08 prk = PIND & BV(PARK);
 	TCNT1 = 0;		// always rearm the timer
-	if (!prk)  sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // TODO: check if MAX485 output is zero when A and B lines are 0V.
+//	if (!prk)  sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // don't activate on zero due to some random interference
 	switch (PAstep) {
 		case 0: // no sync, got 1st positive front
 			if (!prk) {
@@ -218,6 +218,7 @@ ISR(PCINT3_vect) {
 			DP.P2 = PAcur[1];
 			PAchanged = 1;
 			PAstep++;
+			sbi(DF.LPGstatusBits, STATUS_PARKMODE_ACTIVE);  // activate PARKMODE_ACTIVE only when got the actual data
 			break;
 		default:
 			PAstep = 0;
