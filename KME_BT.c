@@ -420,6 +420,8 @@ void ReadParamsEEPROM(void) {
 /////////////////////////////////////////////////////////
 void WriteParamsEEPROM(int withFlow) {
 	u08 _sreg = SREG;
+	u32 _totalLPGInTank = 0, _totalPETInTank = 0;
+	u16 _eepromUpdateCount = 0;
 	cli();
 	// slow down the clock while writing to EEPROM
 	CLKPR = (1<<CLKPCE);
@@ -433,13 +435,28 @@ void WriteParamsEEPROM(int withFlow) {
 		eeprom_busy_wait();
 		eeprom_update_byte((u08*)&eepromSpeedCor, DR.SpeedCorr);
 	}
-	eeprom_busy_wait();
-	eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
-	eeprom_busy_wait();
-	eeprom_update_dword((u32*)&eepromPETTank, DS.totalPETInTank);
-	DR.eepromUpdateCount++; 
-	eeprom_busy_wait();
-	eeprom_update_word((uint16_t*)&eepromUpdCount, DR.eepromUpdateCount);
+	// trying to write to EEPROM three times
+	for (u08 i = 0; i < 3; i++){
+		if (DS.totalLPGInTank != _totalLPGInTank) {
+			eeprom_busy_wait();
+			eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
+			eeprom_busy_wait();
+			_totalLPGInTank = eeprom_read_dword((u32*)&eepromLPGTank);
+		}
+		if (DS.totalPETInTank != _totalPETInTank) {
+			eeprom_busy_wait();
+			eeprom_update_dword((u32*)&eepromPETTank, DS.totalPETInTank);
+			eeprom_busy_wait();
+			_totalPETInTank = eeprom_read_dword((u32*)&eepromPETTank);
+		}
+		DR.eepromUpdateCount++;
+		if (DR.eepromUpdateCount != _eepromUpdateCount + 1) {
+			eeprom_busy_wait();
+			eeprom_update_word((uint16_t*)&eepromUpdCount, DR.eepromUpdateCount);
+			eeprom_busy_wait();
+			_eepromUpdateCount = eeprom_read_word((uint16_t*)&eepromUpdCount);
+		}
+	}
 	// clock back to nominal
 	CLKPR = (1<<CLKPCE);
 	CLKPR = 0;
@@ -618,7 +635,7 @@ static inline void ParseOBDResponse() {
 /////////////////////////////////////////////////////////
 static inline void ParseOSAResponse() {
 // copy the OSA Bank 1 to KMEcmds after the request bytes
-	for (int j = 0; j < 25; j++) {
+	for (u08 j = 0; j < 25; j++) {
 		DO.OSA[j] = KMEBuff[j + 3];
 	}
 }
