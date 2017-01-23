@@ -230,7 +230,7 @@ ISR(PCINT3_vect) {
 // ======================================================
 ISR(USART1_RX_vect)
 {
-	unsigned char RS;
+	u08 RS;
 
 	RS = UDR1;
 	if (PTmode >= modeTransparent && !(PTmode & modeWait))  UDR0 = RS;   // pass bytes to PC directly while in transparent/passthrough mode
@@ -240,9 +240,11 @@ ISR(USART1_RX_vect)
 		KMEBuff[KMEidx++] = RS;  // ... try to process the response as well
 		// we have a response with a valid checksum and num of bytes received
 		if ((!KMEgr) && (KMEBuff[0] == bRespKME) && (KMEidx > 1) && (KMEidx >= KMEBuff[1]) && (RS == KMEcs)) {
-			KMEidx = 0;  KMEcs = 0;  KMEgr = 1;  // "got response" signal processed in main cycle
+			KMEidx = 0;  
+			KMEcs = 0;  
+			KMEgr = 1;  // "got response" signal processed in main cycle
 		} else {
-			KMEcs = KMEcs + RS;
+			KMEcs += RS;
 		}
 		// prevent buffer overflow
 		if (KMEidx >= sizeof(KMEBuff)) {
@@ -282,8 +284,7 @@ ISR(USART0_UDRE_vect)
 {
 	if (PCtail != PChead)
 	{
-		UDR0 = PCsend[PCtail];
-		PCtail++;
+		UDR0 = PCsend[PCtail++];
 		if (PCtail >= sizeof(PCsend)) PCtail = 0;
 	}
 	else
@@ -419,7 +420,7 @@ void ReadParamsEEPROM(void) {
 
 /////////////////////////////////////////////////////////
 void WriteParamsEEPROM(int withFlow) {
-	u08 _sreg = SREG;
+	u08 _sreg = SREG, i = 0;
 	u32 _totalLPGInTank = 0, _totalPETInTank = 0;
 	u16 _eepromUpdateCount = 0;
 	cli();
@@ -435,28 +436,19 @@ void WriteParamsEEPROM(int withFlow) {
 		eeprom_busy_wait();
 		eeprom_update_byte((u08*)&eepromSpeedCor, DR.SpeedCorr);
 	}
-	// trying to write to EEPROM three times
-	for (u08 i = 0; i < 3; i++){
-		if (DS.totalLPGInTank != _totalLPGInTank) {
-			eeprom_busy_wait();
-			eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
-			eeprom_busy_wait();
-			_totalLPGInTank = eeprom_read_dword((u32*)&eepromLPGTank);
-		}
-		if (DS.totalPETInTank != _totalPETInTank) {
-			eeprom_busy_wait();
-			eeprom_update_dword((u32*)&eepromPETTank, DS.totalPETInTank);
-			eeprom_busy_wait();
-			_totalPETInTank = eeprom_read_dword((u32*)&eepromPETTank);
-		}
-		DR.eepromUpdateCount++;
-		if (DR.eepromUpdateCount != _eepromUpdateCount + 1) {
-			eeprom_busy_wait();
-			eeprom_update_word((uint16_t*)&eepromUpdCount, DR.eepromUpdateCount);
-			eeprom_busy_wait();
-			_eepromUpdateCount = eeprom_read_word((uint16_t*)&eepromUpdCount);
-		}
-	}
+	// trying to write to EEPROM up to three times if case any of vars was read back with a wrong value
+	do {
+		eeprom_busy_wait();
+		eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
+		eeprom_busy_wait();
+		eeprom_update_dword((u32*)&eepromPETTank, DS.totalPETInTank);
+		eeprom_busy_wait();
+		eeprom_update_word((uint16_t*)&eepromUpdCount, ++DR.eepromUpdateCount);
+		eeprom_busy_wait();
+		_totalLPGInTank = eeprom_read_dword((u32*)&eepromLPGTank);
+		_totalPETInTank = eeprom_read_dword((u32*)&eepromPETTank);
+		_eepromUpdateCount = eeprom_read_word((uint16_t*)&eepromUpdCount);
+	} while ((DS.totalLPGInTank != _totalLPGInTank || DS.totalPETInTank != _totalPETInTank || DR.eepromUpdateCount != _eepromUpdateCount) && (++i <= 3));
 	// clock back to nominal
 	CLKPR = (1<<CLKPCE);
 	CLKPR = 0;
