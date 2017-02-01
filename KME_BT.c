@@ -102,9 +102,10 @@ volatile u08 eepromDeadZone[202] EEMEM = {209, 176, 0};
 volatile u32 eepromLPGTank EEMEM = 0;
 volatile u32 eepromPETTank EEMEM = 0;
 volatile u16 eepromUpdCount EEMEM = 0;
-volatile u08 eepromDeadZone2[200] EEMEM = {0, 0, 0};
+volatile u32 eepromXORTank EEMEM = 0;  // XOR between LPG Tank and PET Tank amounts
+volatile u08 eepromDeadZone2[196] EEMEM = {0, 0, 0};
 volatile s08 eepromSpeedCor EEMEM = 1;
-volatile u08 eepromLPGFlow EEMEM = 225;
+volatile u08 eepromLPGFlow EEMEM = 245;
 volatile u08 eepromPETFlow EEMEM = 177;
 
 // ======================================================
@@ -402,8 +403,14 @@ void InitParams(void) {
 /////////////////////////////////////////////////////////
 void ReadParamsEEPROM(void) {
 	u08 tmp;
-	u32 tmp32;
+	u32 tmp32, _totalXORTank;
+	u08 _sreg = SREG, i = 0;
 
+	cli();
+	// slow down the clock while reading from EEPROM
+	CLKPR = (1<<CLKPCE);
+	CLKPR = (1<<CLKPS2);  // set clock divider to 16
+	nop();nop();
 	eeprom_busy_wait();
 	tmp = eeprom_read_byte((u08*)&eepromLPGFlow);
 	if (tmp < 0xFF)  DR.LPGinjFlow = tmp;
@@ -412,10 +419,31 @@ void ReadParamsEEPROM(void) {
 	tmp = eeprom_read_byte((u08*)&eepromSpeedCor);
 	if (tmp < 0xFF)  DR.SpeedCorr = tmp;
 	DR.eepromUpdateCount = eeprom_read_word((uint16_t*)&eepromUpdCount);
-	tmp32 = eeprom_read_dword((u32*)&eepromLPGTank);
-	if (tmp32 < 0xFFFFFFFF)  DS.totalLPGInTank = tmp32;
-	tmp32 = eeprom_read_dword((u32*)&eepromPETTank);
-	if (tmp32 < 0xFFFFFFFF)  DS.totalPETInTank = tmp32;
+	// read tank amounts three times and check with XORed value
+	do {
+		tmp32 = eeprom_read_dword((u32*)&eepromLPGTank);
+		if (tmp32 < 0xFFFFFFFF)  DS.totalLPGInTank = tmp32;
+		tmp32 = eeprom_read_dword((u32*)&eepromPETTank);
+		if (tmp32 < 0xFFFFFFFF)  DS.totalPETInTank = tmp32;
+		tmp32 = eeprom_read_dword((u32*)&eepromXORTank);
+		_totalXORTank = tmp32;
+	} while ((DS.totalLPGInTank ^ DS.totalPETInTank ^ _totalXORTank) && ++i <= 3);
+	// if XOR is still incorrect after three attempts
+	if (DS.totalLPGInTank ^ DS.totalPETInTank ^ _totalXORTank) {
+		// if PET amount looks reasonable (more than -10.0 liters)
+		if ((s32)DS.totalPETInTank > -100000000) {
+			tmp32 = DS.totalPETInTank ^ _totalXORTank;
+			// if restored LPG amount looks reasonable - assign it to the variable
+			if ((s32)tmp32 > -100000000) 
+				DS.totalLPGInTank = tmp32;
+		}
+	}
+	// clock back to nominal
+	CLKPR = (1<<CLKPCE);
+	CLKPR = 0;
+	EEAR = 0xFF;			// atmega324 doesn't have any errata, but we'll try this trick anyway
+	sbi(PCreq, RESP_RARE_BIT);
+	SREG = _sreg;
 }
 
 /////////////////////////////////////////////////////////
@@ -442,6 +470,8 @@ void WriteParamsEEPROM(int withFlow) {
 		eeprom_update_dword((u32*)&eepromLPGTank, DS.totalLPGInTank);
 		eeprom_busy_wait();
 		eeprom_update_dword((u32*)&eepromPETTank, DS.totalPETInTank);
+		eeprom_busy_wait();
+		eeprom_update_dword((u32*)&eepromXORTank, DS.totalPETInTank ^ DS.totalLPGInTank);
 		eeprom_busy_wait();
 		eeprom_update_word((uint16_t*)&eepromUpdCount, ++DR.eepromUpdateCount);
 		eeprom_busy_wait();
