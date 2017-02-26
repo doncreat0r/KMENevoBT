@@ -684,7 +684,7 @@ void ReadTemperature() {
 		for (i=0;i<9;i++)  temp[i] = read_byte();
 		// if CRC matches - convert T and put it into buffer
 		if (temp[8] == calc_crc(&temp[0], 8)) {
-			DS.outsideTemp = (temp[0]<<8) + temp[1];
+			DS.outsideTemp = (temp[1]<<8) + temp[0];  // now DS18B20
 		} 
 		DATAtimer = 0;
 		tempMode = 0;
